@@ -1,0 +1,10 @@
+自动化工具箱 0.2.0
+
+安装后可从 Ubuntu 应用菜单打开“自动化工具箱”，也可以在终端运行：
+automation-toolbox
+
+卸载命令：
+sudo apt remove automation-toolbox
+
+任务数据库默认保存在：
+~/.local/share/automation-toolbox/data/toolbox.sqlite3

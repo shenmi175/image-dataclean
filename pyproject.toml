@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "automation-toolbox"
+version = "0.2.0"
+description = "Local-first visual automation toolbox"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.34,<1.0",
+  "pydantic>=2.10,<3.0",
+  "pydantic-settings>=2.7,<3.0",
+  "pywebview>=6.0,<7.0",
+  "numpy>=2.0,<3.0",
+  "opencv-python-headless>=4.10,<5.0",
+  "tqdm>=4.67,<5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1.0",
+  "pytest>=8.3,<9.0",
+  "ruff>=0.9,<1.0",
+]
+build = [
+  "pyinstaller>=6.14,<7.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["backend*", "desktop*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

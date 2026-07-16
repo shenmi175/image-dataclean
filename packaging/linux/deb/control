@@ -1,0 +1,11 @@
+Package: automation-toolbox
+Version: 0.2.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Automation Toolbox Team <noreply@localhost>
+Depends: python3-gi, libgtk-3-0t64, libwebkit2gtk-4.1-0, gir1.2-webkit2-4.1
+Description: Local automation toolbox with parallel task execution
+ A desktop toolbox with a separated FastAPI backend and React frontend.
+ The first bundled tool extracts image frames from videos and supports
+ parallel tasks, progress visualization, pause, retry, and cancellation.

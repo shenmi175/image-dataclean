@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=自动化工具箱
+Name[en]=Automation Toolbox
+Comment=视频转图片与并行任务管理
+Comment[en]=Video frame extraction and parallel task management
+Exec=automation-toolbox
+Icon=automation-toolbox
+Terminal=false
+StartupNotify=true
+Categories=Utility;
+Keywords=video;frames;automation;tasks;视频;图片;工具箱;

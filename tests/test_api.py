@@ -1,0 +1,200 @@
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
+from backend.api.router import api_router
+from backend.app import FRONTEND_DIST, create_app
+from backend.core.settings import Settings
+from backend.tools.registry import registry
+from backend.tools.video_frames import VideoFramesParams
+
+
+def test_required_api_routes_are_registered() -> None:
+    paths = set(create_app().openapi()["paths"])
+    assert {
+        "/api/health",
+        "/api/tools",
+        "/api/tasks",
+        "/api/tasks/{task_id}/pause",
+        "/api/tasks/{task_id}/resume",
+        "/api/tasks/{task_id}/cancel",
+        "/api/tasks/{task_id}/retry",
+        "/api/tasks/active",
+        "/api/tasks/history",
+        "/api/settings",
+        "/api/settings/reset",
+        "/api/events/stream",
+    } <= paths
+    assert "/events" in {route.path for route in api_router.routes}
+
+
+def test_video_tool_is_discoverable() -> None:
+    tools = [tool.metadata() for tool in registry.list()]
+    assert [tool["id"] for tool in tools] == ["video-frames"]
+    assert "params_schema" in tools[0]
+
+
+def test_video_params_require_a_source() -> None:
+    try:
+        VideoFramesParams.model_validate({"output_dir": "/tmp"})
+    except ValueError as error:
+        assert "至少选择一个视频文件或一个视频目录" in str(error)
+    else:
+        raise AssertionError("source validation did not run")
+
+
+def test_built_frontend_contains_application_title() -> None:
+    index = Path(FRONTEND_DIST) / "index.html"
+    assert index.is_file()
+    assert "自动化工具箱" in index.read_text(encoding="utf-8")
+
+
+def test_websocket_accepts_query_token(tmp_path: Path) -> None:
+    settings = Settings(
+        auth_disabled=False,
+        session_token="test-session-token",
+        data_dir=tmp_path,
+        log_dir=tmp_path / "logs",
+    )
+    with TestClient(create_app(settings)) as client:
+        with client.websocket_connect("/api/events?token=test-session-token"):
+            pass
+
+
+def test_websocket_rejects_invalid_query_token(tmp_path: Path) -> None:
+    settings = Settings(
+        auth_disabled=False,
+        session_token="test-session-token",
+        data_dir=tmp_path,
+        log_dir=tmp_path / "logs",
+    )
+    with TestClient(create_app(settings)) as client:
+        with pytest.raises(WebSocketDisconnect) as error:
+            with client.websocket_connect("/api/events?token=wrong-token"):
+                pass
+    assert error.value.code == 4401
+
+
+def test_event_stream_rejects_invalid_query_token(tmp_path: Path) -> None:
+    settings = Settings(
+        auth_disabled=False,
+        session_token="test-session-token",
+        data_dir=tmp_path,
+        log_dir=tmp_path / "logs",
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/api/events/stream?token=wrong-token")
+    assert response.status_code == 401
+
+
+def test_settings_persist_and_reset(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs", max_workers=2)
+    with TestClient(create_app(settings)) as client:
+        response = client.put(
+            "/api/settings",
+            json={
+                "max_workers": 3,
+                "default_output_dir": str(tmp_path / "outputs"),
+                "video_frames": {
+                    "recursive": False,
+                    "frame_interval": 25,
+                    "resize": True,
+                    "width": 800,
+                    "height": 600,
+                    "resize_mode": "direct",
+                },
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["max_workers"] == 3
+        assert client.app.state.task_manager.max_workers == 3
+
+    with TestClient(create_app(settings)) as client:
+        persisted = client.get("/api/settings").json()
+        assert persisted["max_workers"] == 3
+        assert persisted["video_frames"]["frame_interval"] == 25
+        reset = client.post("/api/settings/reset").json()
+        assert reset["max_workers"] == 2
+        assert reset["default_output_dir"] is None
+        assert reset["video_frames"]["frame_interval"] == 10
+
+
+def test_active_and_history_are_separated(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    with TestClient(create_app(settings)) as client:
+        database = client.app.state.database
+        for task_id in ("active-task", "completed-task", "failed-task"):
+            database.create_task(
+                task_id=task_id,
+                tool_id="video-frames",
+                tool_version="1.0.0",
+                params={},
+                output_path=str(tmp_path / f"result_{task_id[:8]}"),
+            )
+        database.update_task("active-task", status="running")
+        database.update_task("completed-task", status="completed")
+        database.update_task("failed-task", status="failed", error_summary="测试失败")
+
+        active = client.get("/api/tasks/active").json()
+        assert [task["id"] for task in active] == ["active-task"]
+        history = client.get("/api/tasks/history?limit=1&status=failed").json()
+        assert history["total"] == 1
+        assert history["items"][0]["id"] == "failed-task"
+        assert history["counts"]["completed"] == 1
+        assert history["counts"]["failed"] == 1
+
+
+def test_delete_history_keeps_or_removes_output_as_requested(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    with TestClient(create_app(settings)) as client:
+        database = client.app.state.database
+        keep_id = "abcdefgh-keep"
+        keep_output = tmp_path / f"result_{keep_id[:8]}"
+        keep_output.mkdir()
+        database.create_task(
+            task_id=keep_id,
+            tool_id="video-frames",
+            tool_version="1.0.0",
+            params={},
+            output_path=str(keep_output),
+        )
+        database.update_task(keep_id, status="completed")
+        assert client.delete(f"/api/tasks/{keep_id}").status_code == 200
+        assert keep_output.is_dir()
+        assert database.get_task(keep_id) is None
+
+        remove_id = "ijklmnop-remove"
+        remove_output = tmp_path / f"result_{remove_id[:8]}"
+        remove_output.mkdir()
+        (remove_output / "frame.jpg").write_bytes(b"frame")
+        database.create_task(
+            task_id=remove_id,
+            tool_id="video-frames",
+            tool_version="1.0.0",
+            params={},
+            output_path=str(remove_output),
+        )
+        database.update_task(remove_id, status="completed")
+        response = client.delete(f"/api/tasks/{remove_id}?delete_output=true")
+        assert response.status_code == 200
+        assert response.json()["output_deleted"] is True
+        assert not remove_output.exists()
+
+
+def test_delete_rejects_active_task_and_unsafe_output(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
+    with TestClient(create_app(settings)) as client:
+        database = client.app.state.database
+        database.create_task(
+            task_id="unsafe-task",
+            tool_id="video-frames",
+            tool_version="1.0.0",
+            params={},
+            output_path=str(tmp_path),
+        )
+        assert client.delete("/api/tasks/unsafe-task").status_code == 409
+        database.update_task("unsafe-task", status="completed")
+        assert client.delete("/api/tasks/unsafe-task?delete_output=true").status_code == 409
+        assert database.get_task("unsafe-task") is not None
