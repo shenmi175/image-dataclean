@@ -23,6 +23,7 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
 .hero { display: flex; align-items: flex-start; gap: 18px; margin: 4px 0 24px; }
 .hero h2 { margin: 0 0 5px !important; }
 .hero p { max-width: 680px; margin: 0; color: #6d7789; }
+.tool-back { height: auto; margin: 0 0 8px -15px; padding-block: 0; }
 .hero-icon { display: grid; flex: 0 0 52px; width: 52px; height: 52px; place-items: center; border-radius: 16px; color: #fff; background: linear-gradient(145deg, #2563eb, #4f46e5); font-size: 24px; box-shadow: 0 10px 24px rgb(37 99 235 / 22%); }
 .form-card { border: 1px solid #e5eaf2; box-shadow: 0 10px 34px rgb(38 58 94 / 7%); }
 .tool-form .ant-alert { margin-bottom: 24px; }
@@ -34,6 +35,11 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
 .panel-heading h4 { margin: 0 0 2px !important; }
 .task-item { display: block !important; margin-bottom: 12px; padding: 14px !important; border: 1px solid #e8edf5 !important; border-radius: 12px; cursor: pointer; }
 .task-item:hover { border-color: #b8cdfc !important; box-shadow: 0 6px 18px rgb(37 99 235 / 8%); }
+.conflict-path { overflow-wrap: anywhere; padding: 8px 10px; border-radius: 8px; background: #f5f7fa; font-family: monospace; }
+.source-config-card { width: 100%; background: #fafcff; }
+.source-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.source-config-grid label { display: block; margin-bottom: 6px; color: #475569; font-size: 13px; }
+.source-config-grid .wide { grid-column: 1 / -1; }
 .task-head, .task-metrics { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .task-message { margin: 4px 0 8px !important; font-size: 12px; }
 .task-metrics { justify-content: flex-start; gap: 14px; font-size: 12px; }
@@ -63,6 +69,22 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
 .params-view { max-height: 260px; overflow: auto; margin: 7px 0 0; padding: 12px; border-radius: 8px; background: #f5f7fb; color: #344054; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
 .failure-list { display: grid; gap: 8px; margin-top: 8px; }
 .mobile-task-button { display: none; }
+.tool-center-page { max-width: 1320px; }
+.tool-center-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 28px; margin-bottom: 30px; }
+.tool-center-heading h2 { margin: 0 0 4px !important; }
+.tool-center-heading p { margin: 0; color: #6d7789; }
+.tool-center-heading .ant-input-affix-wrapper { width: min(380px, 42vw); }
+.tool-category { margin-bottom: 30px; }
+.tool-category-title { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+.tool-category-title h4 { margin: 0 !important; }
+.tool-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.tool-card { min-height: 220px; border-color: #e5eaf2; }
+.tool-card .ant-card-body { display: flex; flex-direction: column; height: 100%; }
+.tool-card-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }
+.tool-card-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 12px; color: #2563eb; background: #eaf1ff; font-size: 20px; }
+.tool-card h4 { margin: 0 0 7px !important; }
+.tool-card p { flex: 1; min-height: 44px; color: #6d7789; }
+.tool-card-link { color: #2563eb; }
 
 @media (max-width: 1100px) {
   .workspace { grid-template-columns: 1fr; padding: 26px; }
@@ -70,6 +92,7 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
   .mobile-task-button { display: inline-flex; }
   .history-filters { grid-template-columns: 1fr 1fr; }
   .history-filters .ant-input-search { grid-column: 1 / -1; }
+  .tool-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 680px) {
@@ -86,4 +109,7 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
   .history-filters .ant-input-search { grid-column: auto; }
   .ant-space-compact { flex-direction: column; }
   .ant-space-compact > * { width: 100% !important; border-radius: 6px !important; }
+  .tool-center-heading { flex-direction: column; gap: 14px; }
+  .tool-center-heading .ant-input-affix-wrapper { width: 100%; }
+  .tool-card-grid { grid-template-columns: 1fr; }
 }

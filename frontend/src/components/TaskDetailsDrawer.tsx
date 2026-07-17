@@ -68,6 +68,14 @@ export function TaskDetailsDrawer({ taskId, onClose }: Props) {
               </Paragraph>
             </div>
           ) : null}
+          {task.pending_conflict ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="目标文件冲突，任务正在等待处理"
+              description={`${task.pending_conflict.source_path} → ${task.pending_conflict.target_path}`}
+            />
+          ) : null}
           <div>
             <Text strong>任务参数</Text>
             <pre className="params-view">{JSON.stringify(task.params, null, 2)}</pre>

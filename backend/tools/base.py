@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from pydantic import BaseModel
@@ -8,6 +9,14 @@ from pydantic import BaseModel
 
 class TaskCancelled(Exception):
     """Raised by a tool at a cooperative cancellation checkpoint."""
+
+
+@dataclass(frozen=True)
+class ToolCapabilities:
+    transfer_modes: tuple[str, ...] = ("copy",)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"transfer_modes": list(self.transfer_modes)}
 
 
 class TaskContext(ABC):
@@ -38,6 +47,10 @@ class TaskContext(ABC):
     @abstractmethod
     def record_failure(self, item: str, error: str) -> None: ...
 
+    def request_conflict_resolution(self, source: str, target: str) -> dict[str, str]:
+        """Pause the task until the caller resolves an output-path conflict."""
+        raise RuntimeError("当前任务上下文不支持交互式冲突处理")
+
 
 class Tool(ABC):
     id: ClassVar[str]
@@ -49,6 +62,7 @@ class Tool(ABC):
     supports_pause: ClassVar[bool] = True
     supports_resume_after_restart: ClassVar[bool] = False
     ui_schema: ClassVar[dict[str, Any]] = {}
+    capabilities: ClassVar[ToolCapabilities] = ToolCapabilities()
 
     @classmethod
     def metadata(cls) -> dict[str, Any]:
@@ -63,6 +77,7 @@ class Tool(ABC):
             "supports_resume_after_restart": cls.supports_resume_after_restart,
             "params_schema": cls.params_model.model_json_schema(mode="validation"),
             "ui_schema": cls.ui_schema,
+            "capabilities": cls.capabilities.as_dict(),
         }
 
     @abstractmethod

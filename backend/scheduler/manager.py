@@ -6,10 +6,11 @@ import queue
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from backend.core.compat import UTC
 from backend.infrastructure.database import Database, utc_now
 from backend.scheduler.events import EventBroker
 from backend.scheduler.models import TERMINAL_STATUSES, TaskStatus
@@ -23,6 +24,7 @@ class RunningTask:
     pause_event: Any
     cancel_event: Any
     message_queue: Any
+    resolution_queue: Any
     cancelling_at: float | None = None
     exit_seen_at: float | None = None
 
@@ -117,6 +119,8 @@ class TaskManager:
             return task
         if task["status"] != TaskStatus.PAUSED or task_id not in self._running:
             raise ValueError("只有已暂停的任务可以恢复")
+        if task.get("pending_conflict"):
+            raise ValueError("请先处理目标文件冲突")
         self._running[task_id].pause_event.clear()
         return task
 
@@ -139,10 +143,43 @@ class TaskManager:
         if running:
             running.cancel_event.set()
             running.cancelling_at = running.cancelling_at or time.monotonic()
+        self.database.abandon_pending_conflict(task_id)
         updated = self.database.update_task(
             task_id,
             status=TaskStatus.CANCELLING,
             message="正在取消任务",
+        )
+        await self._publish(updated, "task.updated")
+        return updated
+
+    async def resolve_conflict(
+        self,
+        task_id: str,
+        conflict_id: str,
+        action: str,
+        scope: str,
+    ) -> dict[str, Any]:
+        task = self._require_task(task_id)
+        running = self._running.get(task_id)
+        if task["status"] != TaskStatus.PAUSED or running is None:
+            raise ValueError("只有因冲突暂停的运行中任务可以处理冲突")
+        self.database.resolve_conflict(task_id, conflict_id, action, scope)
+        running.resolution_queue.put(
+            {
+                "conflict_id": conflict_id,
+                "action": action,
+                "scope": scope,
+            }
+        )
+        updated = self.database.update_task(
+            task_id,
+            status=TaskStatus.RUNNING,
+            message="冲突已处理，任务继续运行",
+        )
+        self.database.append_event(
+            task_id,
+            "task.conflict_resolved",
+            f"目标冲突处理方式: {action} ({scope})",
         )
         await self._publish(updated, "task.updated")
         return updated
@@ -183,6 +220,7 @@ class TaskManager:
             pause_event = self._context.Event()
             cancel_event = self._context.Event()
             message_queue = self._context.Queue()
+            resolution_queue = self._context.Queue()
             process = self._context.Process(
                 target=run_task_worker,
                 args=(
@@ -193,6 +231,7 @@ class TaskManager:
                     pause_event,
                     cancel_event,
                     message_queue,
+                    resolution_queue,
                 ),
                 name=f"toolbox-{task['id'][:8]}",
             )
@@ -202,6 +241,7 @@ class TaskManager:
                 pause_event,
                 cancel_event,
                 message_queue,
+                resolution_queue,
             )
             updated = self.database.update_task(
                 task["id"],
@@ -225,9 +265,7 @@ class TaskManager:
         kind = message["kind"]
         if kind == "progress":
             fields = {
-                key: value
-                for key, value in message.items()
-                if key != "kind" and value is not None
+                key: value for key, value in message.items() if key != "kind" and value is not None
             }
             task = self.database.update_task(task_id, **fields)
             await self._publish(task, "task.progress")
@@ -244,8 +282,30 @@ class TaskManager:
             await self.broker.publish({"type": "task.log", "task_id": task_id, **message})
         elif kind == "failure":
             self.database.add_failure(task_id, message["item"], message["error"])
+        elif kind == "conflict":
+            conflict = self.database.create_conflict(
+                conflict_id=message["conflict_id"],
+                task_id=task_id,
+                source_path=message["source_path"],
+                target_path=message["target_path"],
+            )
+            task = self.database.update_task(
+                task_id,
+                status=TaskStatus.PAUSED,
+                message="目标文件已存在，请选择处理方式",
+            )
+            self.database.append_event(
+                task_id,
+                "task.conflict",
+                f"目标已存在: {message['target_path']}",
+                "warning",
+            )
+            await self.broker.publish(
+                {"type": "task.conflict", "task_id": task_id, "task": task, "conflict": conflict}
+            )
         elif kind == "completed":
             result = message["result"]
+            self.database.abandon_pending_conflict(task_id)
             task = self.database.update_task(
                 task_id,
                 status=TaskStatus.COMPLETED,
@@ -259,6 +319,7 @@ class TaskManager:
             self.database.append_event(task_id, "task.completed", task["message"])
             await self._publish(task, "task.updated")
         elif kind == "cancelled":
+            self.database.abandon_pending_conflict(task_id)
             task = self.database.update_task(
                 task_id,
                 status=TaskStatus.CANCELLED,
@@ -268,6 +329,7 @@ class TaskManager:
             self.database.append_event(task_id, "task.cancelled", message["message"])
             await self._publish(task, "task.updated")
         elif kind == "failed":
+            self.database.abandon_pending_conflict(task_id)
             self.database.append_event(task_id, "task.traceback", message["traceback"], "debug")
             task = self.database.update_task(
                 task_id,
@@ -323,6 +385,7 @@ class TaskManager:
         running = self._running.pop(task_id, None)
         if running:
             running.message_queue.close()
+            running.resolution_queue.close()
 
     def _require_task(self, task_id: str) -> dict[str, Any]:
         task = self.database.get_task(task_id)

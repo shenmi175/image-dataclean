@@ -36,13 +36,19 @@ class NativeDialogs:
         selected = self.window.create_file_dialog(webview.FileDialog.FOLDER)
         return selected[0] if selected else None
 
-    def select_files(self) -> list[str]:
+    def select_files(self, options: dict | None = None) -> list[str]:
         if self.window is None:
             return []
+        options = options or {}
+        extensions = options.get("extensions") or []
+        patterns = ";".join(
+            f"*{item if str(item).startswith('.') else '.' + str(item)}" for item in extensions
+        )
+        file_types = (f"支持的文件 ({patterns})",) if patterns else ("所有文件 (*.*)",)
         selected = self.window.create_file_dialog(
             webview.FileDialog.OPEN,
-            allow_multiple=True,
-            file_types=("视频文件 (*.mp4;*.avi;*.mkv;*.mov;*.flv;*.wmv)",),
+            allow_multiple=bool(options.get("multiple", True)),
+            file_types=file_types,
         )
         return list(selected or [])
 

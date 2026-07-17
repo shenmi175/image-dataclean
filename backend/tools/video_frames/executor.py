@@ -9,9 +9,10 @@ import cv2
 import numpy as np
 
 from backend.tools.base import TaskContext, Tool
+from backend.tools.common import VIDEO_SUFFIXES, checkpoint, discover_files
 from backend.tools.video_frames.spec import VideoFramesParams
 
-VIDEO_EXTENSIONS = {".mp4", ".avi", ".mkv", ".mov", ".flv", ".wmv"}
+VIDEO_EXTENSIONS = VIDEO_SUFFIXES
 
 
 def letterbox_resize(
@@ -58,8 +59,10 @@ def discover_videos(params: VideoFramesParams) -> list[tuple[Path, Path | None]]
     candidates: list[tuple[Path, Path | None]] = []
     if params.input_dir is not None:
         root = params.input_dir.expanduser().resolve()
-        iterator = root.rglob("*") if params.recursive else root.glob("*")
-        candidates.extend((path, root) for path in iterator if path.is_file())
+        candidates.extend(
+            (path, root)
+            for path in discover_files(root, VIDEO_EXTENSIONS, recursive=params.recursive)
+        )
     candidates.extend((path.expanduser().resolve(), None) for path in params.input_files)
 
     discovered: dict[str, tuple[Path, Path | None]] = {}
@@ -112,6 +115,10 @@ class VideoFramesTool(Tool):
             "output_dir": "directory",
             "resize_mode": "radio",
         },
+        "file_filters": {"input_files": sorted(VIDEO_EXTENSIONS)},
+        "picker_titles": {"input_files": "选择视频文件"},
+        "submit_label": "创建视频转图片任务",
+        "notice": "文件和目录可同时使用，重复视频会自动去重。每次任务都会创建独立输出目录。",
     }
 
     def run(self, params: VideoFramesParams, context: TaskContext) -> dict[str, Any]:
@@ -142,8 +149,7 @@ class VideoFramesTool(Tool):
         started = time.monotonic()
 
         for video, source_root in videos:
-            context.raise_if_cancelled()
-            context.wait_if_paused()
+            checkpoint(context)
             context.log("info", f"开始处理 {video.name}")
             capture = cv2.VideoCapture(str(video))
             if not capture.isOpened():
@@ -157,8 +163,7 @@ class VideoFramesTool(Tool):
             video_written = 0
             try:
                 while True:
-                    context.raise_if_cancelled()
-                    context.wait_if_paused()
+                    checkpoint(context)
                     ok, frame = capture.read()
                     if not ok:
                         break

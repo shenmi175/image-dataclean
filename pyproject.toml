@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "automation-toolbox"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local-first visual automation toolbox"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -16,6 +16,8 @@ dependencies = [
   "pywebview>=6.0,<7.0",
   "numpy>=2.0,<3.0",
   "opencv-python-headless>=4.10,<5.0",
+  "Pillow>=11.0,<13.0",
+  "PyYAML>=6.0,<7.0",
   "tqdm>=4.67,<5.0",
 ]
 

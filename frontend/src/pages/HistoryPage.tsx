@@ -31,7 +31,7 @@ import type { TableProps } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../api/client";
-import type { HistoryResponse, Task, TaskStatus } from "../api/types";
+import type { HistoryResponse, Task, TaskStatus, ToolMetadata } from "../api/types";
 import { statusColor, statusLabel } from "../components/TaskCenter";
 import { TaskDetailsDrawer } from "../components/TaskDetailsDrawer";
 
@@ -46,11 +46,12 @@ const emptyHistory: HistoryResponse = {
 
 type Props = {
   revision: number;
+  tools: ToolMetadata[];
   onReuse: (task: Task) => void;
   onTaskCreated: (task: Task) => void;
 };
 
-export default function HistoryPage({ revision, onReuse, onTaskCreated }: Props) {
+export default function HistoryPage({ revision, tools, onReuse, onTaskCreated }: Props) {
   const [data, setData] = useState<HistoryResponse>(emptyHistory);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
@@ -131,7 +132,7 @@ export default function HistoryPage({ revision, onReuse, onTaskCreated }: Props)
       key: "task",
       render: (_, task) => (
         <div>
-          <Text strong>视频转图片</Text>
+          <Text strong>{tools.find((tool) => tool.id === task.tool_id)?.name ?? task.tool_id}</Text>
           <Text type="secondary" className="table-subline">{task.id.slice(0, 12)}</Text>
         </div>
       ),

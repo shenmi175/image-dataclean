@@ -17,14 +17,37 @@ export type ToolMetadata = {
   status: string;
   supports_pause: boolean;
   supports_resume_after_restart: boolean;
+  capabilities: {
+    transfer_modes: Array<"copy" | "move">;
+  };
   params_schema: {
     properties: Record<string, JsonSchemaProperty>;
     required?: string[];
+    $defs?: Record<string, JsonSchemaProperty>;
   };
   ui_schema: {
     order?: string[];
     widgets?: Record<string, string>;
+    submit_label?: string;
+    notice?: string;
+    enum_labels?: Record<string, Record<string, string>>;
+    file_filters?: Record<string, string[]>;
+    picker_titles?: Record<string, string>;
+    full_width?: string[];
+    visible_if?: Record<string, { field: string; equals: unknown }>;
   };
+};
+
+export type TaskConflict = {
+  id: string;
+  task_id: string;
+  source_path: string;
+  target_path: string;
+  status: "pending" | "resolved" | "abandoned";
+  action: "skip" | "overwrite" | "rename" | null;
+  scope: "current" | "remaining" | null;
+  created_at: string;
+  resolved_at: string | null;
 };
 
 export type JsonSchemaProperty = {
@@ -36,6 +59,10 @@ export type JsonSchemaProperty = {
   enum?: string[];
   anyOf?: JsonSchemaProperty[];
   items?: JsonSchemaProperty;
+  properties?: Record<string, JsonSchemaProperty>;
+  required?: string[];
+  additionalProperties?: JsonSchemaProperty | boolean;
+  $ref?: string;
 };
 
 export type Task = {
@@ -59,6 +86,7 @@ export type Task = {
   source_task_id: string | null;
   error_summary: string | null;
   revision: number;
+  pending_conflict: TaskConflict | null;
 };
 
 export type TaskLog = {

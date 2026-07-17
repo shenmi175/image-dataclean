@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from backend.core.compat import UTC
 from backend.scheduler.models import TaskStatus
 
 
@@ -73,6 +74,19 @@ class Database:
                     error TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS task_conflicts (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    source_path TEXT NOT NULL,
+                    target_path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    action TEXT,
+                    scope TEXT,
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_task_conflicts_pending
+                    ON task_conflicts(task_id) WHERE status='pending';
                 CREATE TABLE IF NOT EXISTS presets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     tool_id TEXT NOT NULL,
@@ -368,6 +382,80 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def create_conflict(
+        self,
+        *,
+        conflict_id: str,
+        task_id: str,
+        source_path: str,
+        target_path: str,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self._lock, self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO task_conflicts(
+                    id,task_id,source_path,target_path,status,created_at
+                ) VALUES(?,?,?,?,?,?)
+                """,
+                (conflict_id, task_id, source_path, target_path, "pending", now),
+            )
+        conflict = self.get_pending_conflict(task_id)
+        assert conflict is not None
+        return conflict
+
+    def get_pending_conflict(self, task_id: str) -> dict[str, Any] | None:
+        with self._lock, self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id,task_id,source_path,target_path,status,action,scope,
+                       created_at,resolved_at
+                FROM task_conflicts WHERE task_id=? AND status='pending'
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def resolve_conflict(
+        self,
+        task_id: str,
+        conflict_id: str,
+        action: str,
+        scope: str,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self._lock, self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE task_conflicts SET status='resolved',action=?,scope=?,resolved_at=?
+                WHERE id=? AND task_id=? AND status='pending'
+                """,
+                (action, scope, now, conflict_id, task_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("待处理冲突不存在或已经解决")
+            row = connection.execute(
+                """
+                SELECT id,task_id,source_path,target_path,status,action,scope,
+                       created_at,resolved_at
+                FROM task_conflicts WHERE id=?
+                """,
+                (conflict_id,),
+            ).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def abandon_pending_conflict(self, task_id: str) -> None:
+        with self._lock, self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE task_conflicts SET status='abandoned',resolved_at=?
+                WHERE task_id=? AND status='pending'
+                """,
+                (utc_now(), task_id),
+            )
+
     def mark_interrupted(self) -> int:
         now = utc_now()
         statuses = (
@@ -392,10 +480,17 @@ class Database:
                     *statuses,
                 ),
             )
+            connection.execute(
+                """
+                UPDATE task_conflicts SET status='abandoned',resolved_at=?
+                WHERE status='pending'
+                """,
+                (now,),
+            )
             return cursor.rowcount
 
-    @staticmethod
-    def _task_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    def _task_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
         result["params"] = json.loads(result.pop("params_json"))
+        result["pending_conflict"] = self.get_pending_conflict(result["id"])
         return result

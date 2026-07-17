@@ -11,7 +11,7 @@ import { Button, Empty, List, Progress, Space, Tag, Tooltip, Typography, message
 import { memo, useState } from "react";
 
 import { api } from "../api/client";
-import type { Task, TaskStatus } from "../api/types";
+import type { Task, TaskStatus, ToolMetadata } from "../api/types";
 import { TaskDetailsDrawer } from "./TaskDetailsDrawer";
 
 const { Text, Paragraph } = Typography;
@@ -40,6 +40,7 @@ export const statusColor: Record<TaskStatus, string> = {
 
 type Props = {
   tasks: Task[];
+  tools?: ToolMetadata[];
   onChanged: (task: Task) => void;
   compact?: boolean;
 };
@@ -49,9 +50,10 @@ type TaskCardProps = {
   busy: string | null;
   onAction: (task: Task, name: "pause" | "resume" | "cancel" | "retry") => void;
   onDetails: (task: Task) => void;
+  toolName: string;
 };
 
-const TaskCard = memo(function TaskCard({ task, busy, onAction, onDetails }: TaskCardProps) {
+const TaskCard = memo(function TaskCard({ task, busy, onAction, onDetails, toolName }: TaskCardProps) {
   const openOutput = async () => {
     try {
       await api.openPath(task.output_path!);
@@ -70,7 +72,7 @@ const TaskCard = memo(function TaskCard({ task, busy, onAction, onDetails }: Tas
           ) : (
             <PlayCircleOutlined className="running-icon" />
           )}
-          <Text strong>视频转图片</Text>
+          <Text strong>{toolName}</Text>
         </Space>
         <Tag color={statusColor[task.status]}>{statusLabel[task.status]}</Tag>
       </div>
@@ -85,7 +87,16 @@ const TaskCard = memo(function TaskCard({ task, busy, onAction, onDetails }: Tas
       <div className="task-metrics">
         <Text type="secondary">成功 {task.success_count}</Text>
         <Text type={task.failure_count ? "danger" : "secondary"}>失败 {task.failure_count}</Text>
-        {task.speed ? <Text type="secondary">{task.speed.toFixed(1)} 帧/秒</Text> : null}
+        {task.speed ? (
+          <Text type="secondary">
+            {task.speed.toFixed(1)}{" "}
+            {task.tool_id === "video-frames"
+              ? "帧/秒"
+              : ["image-rgb-ir-classifier", "annotation-visualizer"].includes(task.tool_id)
+                ? "张/秒"
+                : "项/秒"}
+          </Text>
+        ) : null}
       </div>
       <Space className="task-actions" onClick={(event) => event.stopPropagation()}>
         {task.status === "running" && (
@@ -98,7 +109,7 @@ const TaskCard = memo(function TaskCard({ task, busy, onAction, onDetails }: Tas
             />
           </Tooltip>
         )}
-        {task.status === "paused" && (
+        {task.status === "paused" && !task.pending_conflict && (
           <Tooltip title="恢复">
             <Button
               size="small"
@@ -140,7 +151,7 @@ const TaskCard = memo(function TaskCard({ task, busy, onAction, onDetails }: Tas
   );
 });
 
-export function TaskCenter({ tasks, onChanged, compact = false }: Props) {
+export function TaskCenter({ tasks, tools = [], onChanged, compact = false }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
 
@@ -171,6 +182,7 @@ export function TaskCenter({ tasks, onChanged, compact = false }: Props) {
             busy={busy}
             onAction={action}
             onDetails={(selected) => setDetailTaskId(selected.id)}
+            toolName={tools.find((tool) => tool.id === task.tool_id)?.name ?? task.tool_id}
           />
         )}
       />

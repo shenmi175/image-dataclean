@@ -16,6 +16,7 @@ def run_task_worker(
     pause_event: Any,
     cancel_event: Any,
     message_queue: Any,
+    resolution_queue: Any,
 ) -> None:
     context = WorkerTaskContext(
         task_id,
@@ -23,6 +24,7 @@ def run_task_worker(
         pause_event,
         cancel_event,
         message_queue,
+        resolution_queue,
     )
     try:
         tool_type = registry.get(tool_id)

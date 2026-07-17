@@ -1,10 +1,12 @@
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from backend.api.router import api_router
+from backend.api.router import api_router, stream_event_messages
 from backend.app import FRONTEND_DIST, create_app
 from backend.core.settings import Settings
 from backend.tools.registry import registry
@@ -21,6 +23,7 @@ def test_required_api_routes_are_registered() -> None:
         "/api/tasks/{task_id}/resume",
         "/api/tasks/{task_id}/cancel",
         "/api/tasks/{task_id}/retry",
+        "/api/tasks/{task_id}/resolve-conflict",
         "/api/tasks/active",
         "/api/tasks/history",
         "/api/settings",
@@ -32,8 +35,42 @@ def test_required_api_routes_are_registered() -> None:
 
 def test_video_tool_is_discoverable() -> None:
     tools = [tool.metadata() for tool in registry.list()]
-    assert [tool["id"] for tool in tools] == ["video-frames"]
-    assert "params_schema" in tools[0]
+    assert {tool["id"] for tool in tools} == {
+        "annotation-visualizer",
+        "coco-to-labelme",
+        "image-rgb-ir-classifier",
+        "labelme-to-yolo-seg",
+        "video-frames",
+        "web-auto-export",
+        "yolo-dataset-merge",
+        "yolo-dataset-split",
+    }
+    assert all("params_schema" in tool for tool in tools)
+    capabilities = {tool["id"]: tool["capabilities"] for tool in tools}
+    assert capabilities["image-rgb-ir-classifier"]["transfer_modes"] == ["copy", "move"]
+    assert capabilities["yolo-dataset-split"]["transfer_modes"] == ["copy"]
+
+
+def test_event_stream_keeps_idle_connection_alive_and_delivers_events() -> None:
+    from backend.scheduler.events import EventBroker
+
+    class FakeRequest:
+        def __init__(self) -> None:
+            self.app = SimpleNamespace(state=SimpleNamespace(event_broker=EventBroker()))
+
+        async def is_disconnected(self) -> bool:
+            return False
+
+    async def exercise() -> None:
+        request = FakeRequest()
+        messages = stream_event_messages(request, heartbeat_seconds=0.001)  # type: ignore[arg-type]
+        assert await messages.__anext__() == ": connected\n\n"
+        assert await messages.__anext__() == ": keepalive\n\n"
+        await request.app.state.event_broker.publish({"type": "test", "task_id": "1"})
+        assert await messages.__anext__() == 'data: {"type":"test","task_id":"1"}\n\n'
+        await messages.aclose()
+
+    asyncio.run(exercise())
 
 
 def test_video_params_require_a_source() -> None:

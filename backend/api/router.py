@@ -3,14 +3,24 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel, Field, ValidationError
 from starlette.responses import StreamingResponse
 
+from backend.core.compat import UTC
 from backend.core.settings import default_workers
 from backend.infrastructure.system import open_path, select_directory, select_files
 from backend.scheduler.models import TERMINAL_STATUSES, TaskStatus
@@ -26,6 +36,18 @@ class CreateTaskRequest(BaseModel):
 
 class OpenPathRequest(BaseModel):
     path: str = Field(min_length=1)
+
+
+class ResolveConflictRequest(BaseModel):
+    conflict_id: str = Field(min_length=1)
+    action: Literal["skip", "overwrite", "rename"]
+    scope: Literal["current", "remaining"]
+
+
+class SelectFilesRequest(BaseModel):
+    title: str = "选择文件"
+    extensions: list[str] = Field(default_factory=list)
+    multiple: bool = True
 
 
 class VideoFramesDefaults(BaseModel):
@@ -265,6 +287,25 @@ async def retry_task(task_id: str, request: Request) -> dict[str, Any]:
     return await task_action(task_id, request, "retry")
 
 
+@api_router.post("/tasks/{task_id}/resolve-conflict", tags=["tasks"])
+async def resolve_task_conflict(
+    task_id: str,
+    payload: ResolveConflictRequest,
+    request: Request,
+) -> dict[str, Any]:
+    try:
+        return await manager(request).resolve_conflict(
+            task_id,
+            payload.conflict_id,
+            payload.action,
+            payload.scope,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="任务不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @api_router.get("/tasks/{task_id}/logs", tags=["tasks"])
 async def task_logs(
     task_id: str,
@@ -286,21 +327,36 @@ async def choose_directory() -> dict[str, str | None]:
 
 
 @api_router.post("/dialogs/select-files", tags=["system"])
-async def choose_files() -> dict[str, list[str]]:
+async def choose_files(payload: SelectFilesRequest | None = None) -> dict[str, list[str]]:
+    options = payload or SelectFilesRequest()
     try:
-        return {"paths": await asyncio.to_thread(select_files)}
+        return {
+            "paths": await asyncio.to_thread(
+                select_files,
+                options.title,
+                options.extensions,
+                multiple=options.multiple,
+            )
+        }
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"无法打开文件选择器: {exc}") from exc
 
 
-@api_router.post("/system/open-path", status_code=204, tags=["system"])
-async def reveal_path(payload: OpenPathRequest) -> None:
+@api_router.post(
+    "/system/open-path",
+    status_code=204,
+    response_class=Response,
+    response_model=None,
+    tags=["system"],
+)
+async def reveal_path(payload: OpenPathRequest) -> Response:
     try:
         await asyncio.to_thread(open_path, payload.path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="路径不存在") from exc
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"无法打开文件管理器: {exc}") from exc
+    return Response(status_code=204)
 
 
 @api_router.websocket("/events")
@@ -331,21 +387,34 @@ async def event_stream(
     if not settings.auth_disabled and token != settings.session_token:
         raise HTTPException(status_code=401, detail="未授权")
 
-    async def generate():  # type: ignore[no-untyped-def]
-        broker = request.app.state.event_broker
+    return StreamingResponse(
+        stream_event_messages(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def stream_event_messages(
+    request: Request, heartbeat_seconds: float = 15
+) -> AsyncIterator[str]:
+    broker = request.app.state.event_broker
+    try:
         async with broker.subscribe() as event_queue:
             yield ": connected\n\n"
-            while True:
+            while not await request.is_disconnected():
                 try:
-                    event = await asyncio.wait_for(event_queue.get(), timeout=15)
-                except TimeoutError:
+                    event = await asyncio.wait_for(
+                        event_queue.get(), timeout=heartbeat_seconds
+                    )
+                except asyncio.TimeoutError:  # noqa: UP041 - distinct on Python 3.10
                     yield ": keepalive\n\n"
                     continue
                 payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
                 yield f"data: {payload}\n\n"
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    except asyncio.CancelledError:
+        # StreamingResponse cancels the iterator when the browser closes or reconnects.
+        return

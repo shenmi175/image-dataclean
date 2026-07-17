@@ -14,7 +14,7 @@ declare global {
     pywebview?: {
       api?: {
         select_directory?: () => Promise<string | null>;
-        select_files?: () => Promise<string[]>;
+        select_files?: (options?: SelectFilesOptions) => Promise<string[]>;
       };
     };
   }
@@ -29,6 +29,14 @@ function readToken(): string | null {
 }
 
 export const sessionToken = readToken();
+
+export type ConnectionState = "connecting" | "connected" | "reconnecting" | "offline";
+
+export type SelectFilesOptions = {
+  title?: string;
+  extensions?: string[];
+  multiple?: boolean;
+};
 
 export type HistoryQuery = {
   statuses?: TaskStatus[];
@@ -77,6 +85,16 @@ export const api = {
     }),
   action: (taskId: string, action: "pause" | "resume" | "cancel" | "retry") =>
     apiFetch<Task>(`/tasks/${taskId}/${action}`, { method: "POST" }),
+  resolveConflict: (
+    taskId: string,
+    conflictId: string,
+    action: "skip" | "overwrite" | "rename",
+    scope: "current" | "remaining",
+  ) =>
+    apiFetch<Task>(`/tasks/${taskId}/resolve-conflict`, {
+      method: "POST",
+      body: JSON.stringify({ conflict_id: conflictId, action, scope }),
+    }),
   deleteTask: (taskId: string, deleteOutput = false) =>
     apiFetch<{ deleted: boolean; output_deleted: boolean }>(
       `/tasks/${taskId}?delete_output=${deleteOutput}`,
@@ -92,10 +110,13 @@ export const api = {
     if (nativeSelect) return { path: await nativeSelect() };
     return apiFetch<{ path: string | null }>("/dialogs/select-directory", { method: "POST" });
   },
-  selectFiles: async () => {
+  selectFiles: async (options: SelectFilesOptions = {}) => {
     const nativeSelect = window.pywebview?.api?.select_files;
-    if (nativeSelect) return { paths: await nativeSelect() };
-    return apiFetch<{ paths: string[] }>("/dialogs/select-files", { method: "POST" });
+    if (nativeSelect) return { paths: await nativeSelect(options) };
+    return apiFetch<{ paths: string[] }>("/dialogs/select-files", {
+      method: "POST",
+      body: JSON.stringify(options),
+    });
   },
   openPath: (path: string) =>
     apiFetch<void>("/system/open-path", { method: "POST", body: JSON.stringify({ path }) }),
@@ -103,14 +124,50 @@ export const api = {
 
 export function connectEvents(
   onEvent: (event: { type: string; task_id: string; task?: Task }) => void,
-  onState: (connected: boolean) => void,
+  onState: (state: ConnectionState) => void,
 ): () => void {
   const tokenQuery = sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : "";
   const source = new EventSource(`/api/events/stream${tokenQuery}`);
-  source.onopen = () => onState(true);
+  let reconnectTimer: number | null = null;
+  let offlineTimer: number | null = null;
+
+  const clearTimers = () => {
+    if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+    if (offlineTimer !== null) window.clearTimeout(offlineTimer);
+    reconnectTimer = null;
+    offlineTimer = null;
+  };
+  const handleOffline = () => {
+    clearTimers();
+    onState("offline");
+  };
+  const handleOnline = () => {
+    if (source.readyState !== EventSource.OPEN) onState("reconnecting");
+  };
+
+  onState(navigator.onLine ? "connecting" : "offline");
+  source.onopen = () => {
+    clearTimers();
+    onState("connected");
+  };
   source.onmessage = (message) => onEvent(JSON.parse(message.data));
-  source.onerror = () => onState(false);
+  source.onerror = () => {
+    clearTimers();
+    if (!navigator.onLine) {
+      onState("offline");
+      return;
+    }
+    // Ignore a very short transport hiccup, then distinguish retrying from a
+    // backend that has remained unavailable.
+    reconnectTimer = window.setTimeout(() => onState("reconnecting"), 800);
+    offlineTimer = window.setTimeout(() => onState("offline"), 10_000);
+  };
+  window.addEventListener("offline", handleOffline);
+  window.addEventListener("online", handleOnline);
   return () => {
+    clearTimers();
+    window.removeEventListener("offline", handleOffline);
+    window.removeEventListener("online", handleOnline);
     source.close();
   };
 }

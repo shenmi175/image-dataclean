@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import queue
 import time
+import uuid
 from multiprocessing.synchronize import Event
 from typing import Any
 
@@ -15,16 +17,19 @@ class WorkerTaskContext(TaskContext):
         pause_event: Event,
         cancel_event: Event,
         message_queue: Any,
+        resolution_queue: Any,
     ) -> None:
         self.task_id = task_id
         self.output_path = output_path
         self._pause_event = pause_event
         self._cancel_event = cancel_event
         self._queue = message_queue
+        self._resolution_queue = resolution_queue
         self._paused_reported = False
         self._last_progress_at = 0.0
         self._last_percent: float | None = None
         self._started_at = time.monotonic()
+        self._remaining_conflict_action: str | None = None
 
     def wait_if_paused(self) -> None:
         while self._pause_event.is_set():
@@ -53,9 +58,8 @@ class WorkerTaskContext(TaskContext):
     ) -> None:
         now = time.monotonic()
         percent = min(current / total * 100, 100.0) if total and total > 0 else None
-        changed_one_percent = (
-            percent is not None
-            and (self._last_percent is None or abs(percent - self._last_percent) >= 1.0)
+        changed_one_percent = percent is not None and (
+            self._last_percent is None or abs(percent - self._last_percent) >= 1.0
         )
         if not force and now - self._last_progress_at < 0.5 and not changed_one_percent:
             return
@@ -80,6 +84,32 @@ class WorkerTaskContext(TaskContext):
     def record_failure(self, item: str, error: str) -> None:
         self._send({"kind": "failure", "item": item, "error": error})
         self.log("error", f"{item}: {error}")
+
+    def request_conflict_resolution(self, source: str, target: str) -> dict[str, str]:
+        if self._remaining_conflict_action is not None:
+            return {"action": self._remaining_conflict_action, "scope": "remaining"}
+        conflict_id = uuid.uuid4().hex
+        self._send(
+            {
+                "kind": "conflict",
+                "conflict_id": conflict_id,
+                "source_path": source,
+                "target_path": target,
+            }
+        )
+        while True:
+            self.raise_if_cancelled()
+            try:
+                resolution = self._resolution_queue.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if resolution.get("conflict_id") == conflict_id:
+                if resolution.get("scope") == "remaining":
+                    self._remaining_conflict_action = str(resolution["action"])
+                return {
+                    "action": str(resolution["action"]),
+                    "scope": str(resolution["scope"]),
+                }
 
     def _send(self, message: dict[str, Any]) -> None:
         self._queue.put(message)

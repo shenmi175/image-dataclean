@@ -38,3 +38,29 @@ def test_pending_tasks_are_fifo(tmp_path: Path) -> None:
         )
 
     assert [task["id"] for task in database.list_pending(2)] == ["first", "second"]
+
+
+def test_task_conflict_is_persisted_and_resolved(tmp_path: Path) -> None:
+    database = Database(tmp_path / "toolbox.sqlite3")
+    database.initialize()
+    database.create_task(
+        task_id="conflict-task",
+        tool_id="image-rgb-ir-classifier",
+        tool_version="1.0.0",
+        params={},
+        output_path="/tmp/result",
+    )
+
+    conflict = database.create_conflict(
+        conflict_id="conflict-1",
+        task_id="conflict-task",
+        source_path="/tmp/source.jpg",
+        target_path="/tmp/result/source_rgb.jpg",
+    )
+
+    assert conflict["status"] == "pending"
+    assert database.get_task("conflict-task")["pending_conflict"]["id"] == "conflict-1"
+    resolved = database.resolve_conflict("conflict-task", "conflict-1", "rename", "remaining")
+    assert resolved["action"] == "rename"
+    assert resolved["scope"] == "remaining"
+    assert database.get_task("conflict-task")["pending_conflict"] is None

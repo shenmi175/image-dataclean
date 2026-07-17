@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from enum import StrEnum
+from backend.core.compat import StrEnum
 
 
 class TaskStatus(StrEnum):
@@ -12,6 +12,7 @@ class TaskStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
+
 
 
 TERMINAL_STATUSES = {

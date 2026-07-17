@@ -1,6 +1,6 @@
 # 自动化工具箱
 
-本项目是一个本地优先、前后端分离的桌面自动化工具箱。首个可用工具为“视频转图片”，支持多文件或递归目录输入、任务级并行、暂停/恢复/取消/重试、实时活动中心、执行历史和持久化设置。
+本项目是一个本地优先、前后端分离的桌面自动化工具箱。内置媒体处理、图像分类、标注转换、数据集划分、合并和可视化工具，支持任务级并行、暂停/恢复/取消/重试、实时活动中心、执行历史和持久化设置。
 
 - React + TypeScript：响应式操作台
 - FastAPI：本地 API 和 SSE 实时事件流
@@ -56,7 +56,7 @@
 
 ```bash
 ./start.sh deb
-sudo apt install ./dist/automation-toolbox_0.2.0_amd64.deb
+sudo apt install ./dist/automation-toolbox_0.3.0_amd64.deb
 ```
 
 目标系统需提供 GTK/WebKit 系统运行库：
@@ -66,6 +66,33 @@ sudo apt install python3-gi gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0
 ```
 
 任务状态保存在 `data/toolbox.sqlite3`。应用异常退出后，未完成任务会标记为“已中断”，已生成的图片不会被删除。
+
+## RGB / 红外候选分类
+
+分类工具按像素的 RGB 通道差异识别彩色图和灰度/红外候选图。默认递归扫描，复制源文件，并为输出目录和文件添加 `_rgb` 或 `_ir` 后缀。普通灰度图也会归入红外候选；该工具不等同于红外成像模型。
+
+## 标注与数据集工具
+
+- Labelme 多边形转 YOLO segmentation
+- web-auto 标注导出为 Labelme 或 COCO
+- COCO polygon 转 Labelme
+- YOLO train/val 安全划分（不修改源数据）
+- Labelme、YOLO、COCO 标注抽样可视化
+- 多个 YOLO segmentation 数据集合并与类别映射
+
+这些任务都写入独立输出目录，并生成 `summary.json`；转换、划分和合并任务还会生成逐文件 CSV 或来源 manifest。
+
+## 新增工具
+
+每个工具使用独立包维护，通常包含 `spec.py`（Pydantic 参数）、`executor.py`（执行逻辑）和 `__init__.py`（公开工具类）。公共能力位于 `backend/tools/common/`：
+
+- `schemas`、`paths`：输出参数、输入存在性和嵌套输出保护
+- `discovery`：按后缀递归发现文件，默认忽略符号链接
+- `transfer`：原子复制/移动及统一冲突处理
+- `batch`：暂停、取消、进度、速率和失败计数
+- `reports`、`yolo`：JSON/CSV 报告和 YOLO 通用读写
+
+新工具继承 `Tool`，通过 `ui_schema` 声明目录、文件、多文件、目录列表和嵌套对象控件；前端会自动生成表单。工具类在 `backend/tools/builtins.py` 增加一条引用后，会自动出现在工具中心，不需要修改菜单或页面代码。只有明确声明 `ToolCapabilities(transfer_modes=("copy", "move"))` 的归档工具才会开放移动源文件能力。
 
 ## 平台依赖说明
 

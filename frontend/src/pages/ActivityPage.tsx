@@ -7,19 +7,20 @@ import {
 } from "@ant-design/icons";
 import { Button, Card, Col, Row, Space, Statistic, Typography } from "antd";
 
-import type { Task } from "../api/types";
+import type { Task, ToolMetadata } from "../api/types";
 import { TaskCenter } from "../components/TaskCenter";
 
 const { Title, Text } = Typography;
 
 type Props = {
   tasks: Task[];
+  tools: ToolMetadata[];
   maxWorkers: number;
   onTaskChanged: (task: Task) => void;
   onRefresh: () => void;
 };
 
-export default function ActivityPage({ tasks, maxWorkers, onTaskChanged, onRefresh }: Props) {
+export default function ActivityPage({ tasks, tools, maxWorkers, onTaskChanged, onRefresh }: Props) {
   const running = tasks.filter((task) => task.status === "running").length;
   const pending = tasks.filter((task) => task.status === "pending").length;
   const paused = tasks.filter((task) => task.status === "paused").length;
@@ -61,7 +62,7 @@ export default function ActivityPage({ tasks, maxWorkers, onTaskChanged, onRefre
         title={<Space><ClockCircleOutlined />活动任务</Space>}
         bordered={false}
       >
-        <TaskCenter tasks={tasks} onChanged={onTaskChanged} />
+        <TaskCenter tasks={tasks} tools={tools} onChanged={onTaskChanged} />
       </Card>
     </div>
   );

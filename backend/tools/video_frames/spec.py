@@ -3,14 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
+
+from backend.tools.common import OutputDirectoryParams
 
 
-class VideoFramesParams(BaseModel):
+class VideoFramesParams(OutputDirectoryParams):
     input_files: list[Path] = Field(default_factory=list, title="视频文件")
     input_dir: Path | None = Field(default=None, title="视频目录")
     recursive: bool = Field(default=True, title="递归扫描子目录")
-    output_dir: Path = Field(title="输出目录")
     frame_interval: int = Field(default=10, ge=1, le=1_000_000, title="抽帧间隔")
     resize: bool = Field(default=True, title="调整图片尺寸")
     width: int = Field(default=640, ge=1, le=32768, title="宽度")
@@ -28,6 +29,4 @@ class VideoFramesParams(BaseModel):
         invalid_files = [path for path in self.input_files if not path.expanduser().is_file()]
         if invalid_files:
             raise ValueError(f"视频文件不存在或不是文件: {invalid_files[0]}")
-        if self.output_dir.exists() and not self.output_dir.is_dir():
-            raise ValueError(f"输出路径不是目录: {self.output_dir}")
         return self

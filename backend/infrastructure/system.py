@@ -24,7 +24,12 @@ def select_directory(title: str = "选择目录") -> str | None:
             root.destroy()
 
 
-def select_files(title: str = "选择视频") -> list[str]:
+def select_files(
+    title: str = "选择文件",
+    extensions: list[str] | None = None,
+    *,
+    multiple: bool = True,
+) -> list[str]:
     from tkinter import Tk, filedialog
 
     with _dialog_lock:
@@ -32,15 +37,20 @@ def select_files(title: str = "选择视频") -> list[str]:
         root.withdraw()
         root.attributes("-topmost", True)
         try:
-            selected = filedialog.askopenfilenames(
-                title=title,
-                filetypes=[
-                    ("视频文件", "*.mp4 *.avi *.mkv *.mov *.flv *.wmv"),
-                    ("所有文件", "*.*"),
-                ],
-                parent=root,
+            patterns = " ".join(
+                f"*{extension if extension.startswith('.') else '.' + extension}"
+                for extension in (extensions or [])
             )
-            return list(selected)
+            filetypes = (
+                [("支持的文件", patterns), ("所有文件", "*.*")]
+                if patterns
+                else [("所有文件", "*.*")]
+            )
+            chooser = filedialog.askopenfilenames if multiple else filedialog.askopenfilename
+            selected = chooser(title=title, filetypes=filetypes, parent=root)
+            if multiple:
+                return list(selected)
+            return [selected] if selected else []
         finally:
             root.destroy()
 
