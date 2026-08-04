@@ -4,9 +4,10 @@ from backend.tools.base import TaskCancelled, TaskContext
 
 
 class RecordingContext(TaskContext):
-    def __init__(self, output: Path) -> None:
+    def __init__(self, output: Path, parallel_workers: int = 3) -> None:
         self.task_id = "dataset-tool-test"
         self.output_path = str(output)
+        self.parallel_workers = parallel_workers
         self.progress: list[tuple[int, int | None]] = []
         self.failures: list[tuple[str, str]] = []
         self.logs: list[str] = []

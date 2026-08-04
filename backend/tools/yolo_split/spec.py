@@ -5,10 +5,10 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from backend.tools.common import OutputDirectoryParams, validate_output_outside
+from backend.tools.common import ParallelToolParams, validate_output_outside
 
 
-class YoloSplitParams(OutputDirectoryParams):
+class YoloSplitParams(ParallelToolParams):
     input_dir: Path = Field(title="YOLO 数据集目录")
     val_ratio: float = Field(default=0.15, gt=0.0, lt=1.0, title="验证集比例")
     seed: int = Field(default=20260707, title="随机种子")

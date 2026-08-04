@@ -63,5 +63,5 @@ INSTALLED_SIZE="$(du -sk "$STAGE_ROOT" | cut -f1)"
 sed -i "/^Architecture:/a Installed-Size: $INSTALLED_SIZE" "$STAGE_ROOT/DEBIAN/control"
 
 OUTPUT="$ROOT_DIR/dist/automation-toolbox_${VERSION}_${ARCHITECTURE}.deb"
-dpkg-deb --build --root-owner-group "$STAGE_ROOT" "$OUTPUT"
+dpkg-deb --build --root-owner-group -Zzstd -z9 "$STAGE_ROOT" "$OUTPUT"
 echo "deb 打包完成：$OUTPUT"

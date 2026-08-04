@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from backend.tools.base import TaskCancelled, TaskContext, Tool
+from backend.tools.base import TaskContext, Tool, ToolCapabilities
 from backend.tools.common import (
     IMAGE_SUFFIXES,
-    checkpoint,
     find_image,
+    parallel_map,
     read_yolo_classes,
     read_yolo_lines,
     transfer_file,
@@ -63,6 +63,7 @@ class YoloSplitTool(Tool):
     version = "1.0.0"
     description = "复制 YOLO 数据集并按固定种子安全生成 train/val，绝不修改源目录。"
     params_model = YoloSplitParams
+    capabilities = ToolCapabilities(supports_parallel=True, parallel_strategy="thread")
     ui_schema = {
         "order": ["input_dir", "output_dir", "val_ratio", "seed", "existing_val_policy"],
         "widgets": {"input_dir": "directory", "output_dir": "directory"},
@@ -103,11 +104,24 @@ class YoloSplitTool(Tool):
         test_samples = load_samples(source, "test")
         assignments.extend((sample, "test") for sample in test_samples)
         output = Path(context.output_path)
-        rows: list[dict[str, Any]] = []
+        rows: list[dict[str, Any] | None] = [None] * len(assignments)
         success = failures = 0
         started = time.monotonic()
-        for index, (sample, target_split) in enumerate(assignments, start=1):
-            checkpoint(context)
+        def process(job: tuple[Sample, str]) -> None:
+            sample, target_split = job
+            image_target = output / "images" / target_split / sample.image.name
+            label_target = output / "labels" / target_split / sample.label.name
+            copied = transfer_file(sample.image, image_target, context)
+            if copied is None:
+                raise RuntimeError("图像目标冲突已跳过")
+            paired_label = label_target.with_name(f"{copied.stem}.txt")
+            paired_label.parent.mkdir(parents=True, exist_ok=True)
+            paired_label.write_text(sample.label.read_text(encoding="utf-8"), encoding="utf-8")
+
+        for completed, result in enumerate(
+            parallel_map(assignments, process, context), start=1
+        ):
+            sample, target_split = result.item
             row = {
                 "stem": sample.stem,
                 "source_split": sample.original_split,
@@ -115,26 +129,16 @@ class YoloSplitTool(Tool):
                 "status": "failed",
                 "error": "",
             }
-            try:
-                image_target = output / "images" / target_split / sample.image.name
-                label_target = output / "labels" / target_split / sample.label.name
-                copied = transfer_file(sample.image, image_target, context)
-                if copied is None:
-                    raise RuntimeError("图像目标冲突已跳过")
-                paired_label = label_target.with_name(f"{copied.stem}.txt")
-                paired_label.parent.mkdir(parents=True, exist_ok=True)
-                paired_label.write_text(sample.label.read_text(encoding="utf-8"), encoding="utf-8")
+            if result.error is None:
                 success += 1
                 row["status"] = "success"
-            except TaskCancelled:
-                raise
-            except Exception as exc:
+            else:
                 failures += 1
-                row["error"] = str(exc) or exc.__class__.__name__
+                row["error"] = str(result.error) or result.error.__class__.__name__
                 context.record_failure(str(sample.image), row["error"])
-            rows.append(row)
+            rows[result.index] = row
             context.report_progress(
-                index,
+                completed,
                 len(assignments),
                 f"正在写入 {target_split}/{sample.image.name}",
                 success_count=success,
@@ -163,10 +167,13 @@ class YoloSplitTool(Tool):
             "success": success,
             "failures": failures,
             "elapsed_seconds": round(time.monotonic() - started, 3),
+            "parallel_workers": context.parallel_workers,
         }
         write_json(output / "summary.json", summary)
         write_csv(
-            output / "files.csv", rows, ["stem", "source_split", "output_split", "status", "error"]
+            output / "files.csv",
+            [row for row in rows if row is not None],
+            ["stem", "source_split", "output_split", "status", "error"],
         )
         if success == 0:
             raise RuntimeError("没有成功写入任何样本")

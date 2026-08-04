@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.responses import StreamingResponse
 
 from backend.core.compat import UTC
-from backend.core.settings import default_workers
+from backend.core.settings import available_cpu_count, default_workers, recommended_parallel_workers
 from backend.infrastructure.system import open_path, select_directory, select_files
 from backend.scheduler.models import TERMINAL_STATUSES, TaskStatus
 from backend.tools.registry import registry
@@ -61,11 +61,17 @@ class VideoFramesDefaults(BaseModel):
 
 class AppSettingsUpdate(BaseModel):
     max_workers: int = Field(ge=1, le=32)
+    parallel_workers: int = Field(default=0, ge=0, le=32)
     default_output_dir: str | None = None
     video_frames: VideoFramesDefaults = Field(default_factory=VideoFramesDefaults)
 
 
-SETTINGS_KEYS = ["max_workers", "default_output_dir", "tool_defaults.video-frames"]
+SETTINGS_KEYS = [
+    "max_workers",
+    "parallel_workers",
+    "default_output_dir",
+    "tool_defaults.video-frames",
+]
 
 
 def manager(request: Request):  # type: ignore[no-untyped-def]
@@ -87,6 +93,10 @@ async def public_config(request: Request) -> dict[str, int]:
     return {
         "max_workers": manager(request).max_workers,
         "recommended_workers": default_workers(),
+        "parallel_workers": manager(request).parallel_workers,
+        "default_parallel_workers": request.app.state.default_parallel_workers,
+        "recommended_parallel_workers": recommended_parallel_workers(manager(request).max_workers),
+        "cpu_count": available_cpu_count(),
     }
 
 
@@ -102,6 +112,10 @@ def resolved_app_settings(request: Request) -> dict[str, Any]:
         "max_workers": manager(request).max_workers,
         "default_max_workers": request.app.state.default_max_workers,
         "recommended_workers": default_workers(),
+        "parallel_workers": manager(request).parallel_workers,
+        "default_parallel_workers": request.app.state.default_parallel_workers,
+        "recommended_parallel_workers": recommended_parallel_workers(manager(request).max_workers),
+        "cpu_count": available_cpu_count(),
         "default_output_dir": output_dir if isinstance(output_dir, str) else None,
         "video_frames": video_defaults.model_dump(mode="json"),
     }
@@ -123,11 +137,13 @@ async def update_settings(payload: AppSettingsUpdate, request: Request) -> dict[
     manager(request).database.set_settings(
         {
             "max_workers": payload.max_workers,
+            "parallel_workers": payload.parallel_workers,
             "default_output_dir": output_dir,
             "tool_defaults.video-frames": payload.video_frames.model_dump(mode="json"),
         }
     )
     manager(request).set_max_workers(payload.max_workers)
+    manager(request).set_parallel_workers(payload.parallel_workers)
     return resolved_app_settings(request)
 
 
@@ -135,6 +151,7 @@ async def update_settings(payload: AppSettingsUpdate, request: Request) -> dict[
 async def reset_settings(request: Request) -> dict[str, Any]:
     manager(request).database.clear_settings(SETTINGS_KEYS)
     manager(request).set_max_workers(request.app.state.default_max_workers)
+    manager(request).set_parallel_workers(request.app.state.default_parallel_workers)
     return resolved_app_settings(request)
 
 

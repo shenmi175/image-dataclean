@@ -5,10 +5,10 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from backend.tools.common import OutputDirectoryParams, validate_output_outside
+from backend.tools.common import ParallelToolParams, validate_output_outside
 
 
-class AnnotationVisualizerParams(OutputDirectoryParams):
+class AnnotationVisualizerParams(ParallelToolParams):
     annotation_format: Literal["labelme", "yolo", "coco"] = Field(title="标注格式")
     input_dir: Path = Field(title="图像/数据集目录")
     annotation_file: Path | None = Field(default=None, title="COCO 标注 JSON")

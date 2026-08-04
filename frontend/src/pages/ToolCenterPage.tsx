@@ -1,6 +1,7 @@
 import {
   AppstoreOutlined,
   ArrowRightOutlined,
+  ClearOutlined,
   PictureOutlined,
   SearchOutlined,
   VideoCameraOutlined,
@@ -13,6 +14,7 @@ import type { ToolMetadata } from "../api/types";
 const { Title, Paragraph, Text } = Typography;
 
 function toolIcon(tool: ToolMetadata) {
+  if (tool.id === "dinov3-frame-deduplicator") return <ClearOutlined />;
   if (tool.id === "video-frames") return <VideoCameraOutlined />;
   if (tool.category.includes("图像")) return <PictureOutlined />;
   return <AppstoreOutlined />;

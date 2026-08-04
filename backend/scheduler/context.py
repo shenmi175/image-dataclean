@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import threading
 import time
 import uuid
 from multiprocessing.synchronize import Event
@@ -14,6 +15,7 @@ class WorkerTaskContext(TaskContext):
         self,
         task_id: str,
         output_path: str,
+        parallel_workers: int,
         pause_event: Event,
         cancel_event: Event,
         message_queue: Any,
@@ -21,6 +23,7 @@ class WorkerTaskContext(TaskContext):
     ) -> None:
         self.task_id = task_id
         self.output_path = output_path
+        self.parallel_workers = parallel_workers
         self._pause_event = pause_event
         self._cancel_event = cancel_event
         self._queue = message_queue
@@ -30,6 +33,7 @@ class WorkerTaskContext(TaskContext):
         self._last_percent: float | None = None
         self._started_at = time.monotonic()
         self._remaining_conflict_action: str | None = None
+        self._conflict_lock = threading.Lock()
 
     def wait_if_paused(self) -> None:
         while self._pause_event.is_set():
@@ -86,30 +90,31 @@ class WorkerTaskContext(TaskContext):
         self.log("error", f"{item}: {error}")
 
     def request_conflict_resolution(self, source: str, target: str) -> dict[str, str]:
-        if self._remaining_conflict_action is not None:
-            return {"action": self._remaining_conflict_action, "scope": "remaining"}
-        conflict_id = uuid.uuid4().hex
-        self._send(
-            {
-                "kind": "conflict",
-                "conflict_id": conflict_id,
-                "source_path": source,
-                "target_path": target,
-            }
-        )
-        while True:
-            self.raise_if_cancelled()
-            try:
-                resolution = self._resolution_queue.get(timeout=0.05)
-            except queue.Empty:
-                continue
-            if resolution.get("conflict_id") == conflict_id:
-                if resolution.get("scope") == "remaining":
-                    self._remaining_conflict_action = str(resolution["action"])
-                return {
-                    "action": str(resolution["action"]),
-                    "scope": str(resolution["scope"]),
+        with self._conflict_lock:
+            if self._remaining_conflict_action is not None:
+                return {"action": self._remaining_conflict_action, "scope": "remaining"}
+            conflict_id = uuid.uuid4().hex
+            self._send(
+                {
+                    "kind": "conflict",
+                    "conflict_id": conflict_id,
+                    "source_path": source,
+                    "target_path": target,
                 }
+            )
+            while True:
+                self.raise_if_cancelled()
+                try:
+                    resolution = self._resolution_queue.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+                if resolution.get("conflict_id") == conflict_id:
+                    if resolution.get("scope") == "remaining":
+                        self._remaining_conflict_action = str(resolution["action"])
+                    return {
+                        "action": str(resolution["action"]),
+                        "scope": str(resolution["scope"]),
+                    }
 
     def _send(self, message: dict[str, Any]) -> None:
         self._queue.put(message)

@@ -31,11 +31,13 @@ export default function SettingsPage({ settings, onChanged }: Props) {
   const [saving, setSaving] = useState(false);
   const [browsing, setBrowsing] = useState(false);
   const resize = Form.useWatch(["video_frames", "resize"], form);
+  const maxWorkers = Form.useWatch("max_workers", form) ?? settings?.max_workers ?? 1;
 
   useEffect(() => {
     if (settings) {
       form.setFieldsValue({
         max_workers: settings.max_workers,
+        parallel_workers: settings.parallel_workers,
         default_output_dir: settings.default_output_dir,
         video_frames: settings.video_frames,
       });
@@ -62,7 +64,7 @@ export default function SettingsPage({ settings, onChanged }: Props) {
         default_output_dir: values.default_output_dir?.trim() || null,
       });
       onChanged(updated);
-      message.success("设置已保存，并发数已立即生效");
+      message.success("设置已保存，将应用于新启动的任务");
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -73,7 +75,7 @@ export default function SettingsPage({ settings, onChanged }: Props) {
   const reset = () => {
     Modal.confirm({
       title: "恢复系统默认设置？",
-      content: "并发数、默认输出目录和视频转图片默认参数将被重置。",
+      content: "任务并发、单任务并行、默认输出目录和视频参数将被重置。",
       okText: "恢复默认",
       cancelText: "取消",
       onOk: async () => {
@@ -106,6 +108,17 @@ export default function SettingsPage({ settings, onChanged }: Props) {
             rules={[{ required: true, message: "请填写并发任务数" }]}
           >
             <InputNumber min={1} max={32} precision={0} style={{ width: 220 }} />
+          </Form.Item>
+          <Form.Item
+            name="parallel_workers"
+            label="单任务并行线程数"
+            extra={
+              `0 表示自动平衡；当前 ${settings.cpu_count} 个可用 CPU，` +
+              `按 ${maxWorkers} 个并发任务建议每任务 ${Math.max(1, Math.floor(settings.cpu_count / maxWorkers))} 个线程。`
+            }
+            rules={[{ required: true, message: "请填写单任务并行数" }]}
+          >
+            <InputNumber min={0} max={32} precision={0} style={{ width: 220 }} />
           </Form.Item>
           <Form.Item name="default_output_dir" label="默认输出目录" extra="留空时，新任务仍需要手动选择输出目录。">
             <Space.Compact block>

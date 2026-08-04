@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -14,14 +15,21 @@ class TaskCancelled(Exception):
 @dataclass(frozen=True)
 class ToolCapabilities:
     transfer_modes: tuple[str, ...] = ("copy",)
+    supports_parallel: bool = False
+    parallel_strategy: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {"transfer_modes": list(self.transfer_modes)}
+        return {
+            "transfer_modes": list(self.transfer_modes),
+            "supports_parallel": self.supports_parallel,
+            "parallel_strategy": self.parallel_strategy,
+        }
 
 
 class TaskContext(ABC):
     task_id: str
     output_path: str
+    parallel_workers: int = 1
 
     @abstractmethod
     def wait_if_paused(self) -> None: ...
@@ -66,6 +74,12 @@ class Tool(ABC):
 
     @classmethod
     def metadata(cls) -> dict[str, Any]:
+        ui_schema = deepcopy(cls.ui_schema)
+        if cls.capabilities.supports_parallel:
+            order = list(ui_schema.get("order", []))
+            if "parallel_workers" not in order:
+                order.append("parallel_workers")
+            ui_schema["order"] = order
         return {
             "id": cls.id,
             "name": cls.name,
@@ -76,7 +90,7 @@ class Tool(ABC):
             "supports_pause": cls.supports_pause,
             "supports_resume_after_restart": cls.supports_resume_after_restart,
             "params_schema": cls.params_model.model_json_schema(mode="validation"),
-            "ui_schema": cls.ui_schema,
+            "ui_schema": ui_schema,
             "capabilities": cls.capabilities.as_dict(),
         }
 

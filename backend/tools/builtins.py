@@ -5,6 +5,7 @@ manifest entry and does not require editing API or frontend navigation code.
 """
 
 BUILTIN_TOOLS = (
+    "backend.tools.frame_deduplicator:FrameDeduplicatorTool",
     "backend.tools.video_frames:VideoFramesTool",
     "backend.tools.image_classifier:ImageClassifierTool",
     "backend.tools.labelme_to_yolo:LabelmeToYoloTool",

@@ -16,11 +16,13 @@ data/*
 !data/.gitkeep
 logs/*
 !logs/.gitkeep
+models/*
+!models/.gitkeep
 
 .env
 *.log
 dist/*
-!dist/automation-toolbox_0.2.0_amd64.deb
+!dist/*.deb
 build/
 *.spec
 !packaging/**/*.spec

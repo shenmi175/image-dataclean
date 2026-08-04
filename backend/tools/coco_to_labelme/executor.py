@@ -8,10 +8,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from backend.tools.base import TaskCancelled, TaskContext, Tool
+from backend.tools.base import TaskContext, Tool, ToolCapabilities
 from backend.tools.coco_to_labelme.spec import CocoToLabelmeParams
 from backend.tools.common import (
-    checkpoint,
+    parallel_map,
     safe_relative_path,
     transfer_file,
     write_csv,
@@ -39,6 +39,7 @@ class CocoToLabelmeTool(Tool):
     version = "1.0.0"
     description = "将 COCO polygon segmentation 标注转换为 Labelme JSON。"
     params_model = CocoToLabelmeParams
+    capabilities = ToolCapabilities(supports_parallel=True, parallel_strategy="thread")
     ui_schema = {
         "order": [
             "coco_json",
@@ -66,11 +67,10 @@ class CocoToLabelmeTool(Tool):
             raise ValueError("COCO JSON 中没有图像记录")
         image_root = params.image_dir.expanduser().resolve()
         output = Path(context.output_path) / "labelme"
-        rows: list[dict[str, Any]] = []
+        rows: list[dict[str, Any] | None] = [None] * len(images)
         success = failures = skipped = shape_count = 0
         started = time.monotonic()
-        for index, image in enumerate(images, start=1):
-            checkpoint(context)
+        def process(image: dict[str, Any]) -> tuple[dict[str, Any], int, int]:
             relative = safe_relative_path(str(image["file_name"]))
             source = image_root / relative
             json_target = (output / relative).with_suffix(".json")
@@ -81,68 +81,82 @@ class CocoToLabelmeTool(Tool):
                 "shapes": 0,
                 "error": "",
             }
-            try:
-                if not source.is_file():
-                    raise FileNotFoundError(f"图像不存在: {source}")
-                copied: Path | None = None
-                if params.copy_images:
-                    copied = transfer_file(source, output / relative, context)
-                    if copied is None:
-                        raise RuntimeError("目标冲突已跳过")
-                shapes = []
-                for annotation in annotations.get(int(image["id"]), []):
-                    label = categories.get(int(annotation["category_id"]))
-                    extracted = polygons(annotation.get("segmentation"))
-                    if not label or not extracted:
-                        skipped += 1
-                        if params.unsupported_policy == "error":
-                            raise ValueError(f"不支持的 annotation id={annotation.get('id')}")
-                        continue
-                    for points in extracted:
-                        shapes.append(
-                            {
-                                "label": label,
-                                "points": points,
-                                "group_id": annotation.get("id"),
-                                "description": "",
-                                "shape_type": "polygon",
-                                "flags": {},
-                                "mask": None,
-                            }
-                        )
-                image_path = (
-                    copied.name
-                    if copied
-                    else Path(os.path.relpath(source, json_target.parent)).as_posix()
-                )
-                document = {
-                    "version": "5.8.3",
-                    "flags": {},
-                    "shapes": shapes,
-                    "imagePath": image_path,
-                    "imageData": base64.b64encode(source.read_bytes()).decode("ascii")
-                    if params.embed_image_data
-                    else None,
-                    "imageHeight": int(image["height"]),
-                    "imageWidth": int(image["width"]),
-                }
-                write_json(json_target, document)
-                shape_count += len(shapes)
+            if not source.is_file():
+                raise FileNotFoundError(f"图像不存在: {source}")
+            copied: Path | None = None
+            if params.copy_images:
+                copied = transfer_file(source, output / relative, context)
+                if copied is None:
+                    raise RuntimeError("目标冲突已跳过")
+            shapes = []
+            local_skipped = 0
+            for annotation in annotations.get(int(image["id"]), []):
+                label = categories.get(int(annotation["category_id"]))
+                extracted = polygons(annotation.get("segmentation"))
+                if not label or not extracted:
+                    local_skipped += 1
+                    if params.unsupported_policy == "error":
+                        raise ValueError(f"不支持的 annotation id={annotation.get('id')}")
+                    continue
+                for points in extracted:
+                    shapes.append(
+                        {
+                            "label": label,
+                            "points": points,
+                            "group_id": annotation.get("id"),
+                            "description": "",
+                            "shape_type": "polygon",
+                            "flags": {},
+                            "mask": None,
+                        }
+                    )
+            image_path = (
+                copied.name
+                if copied
+                else Path(os.path.relpath(source, json_target.parent)).as_posix()
+            )
+            document = {
+                "version": "5.8.3",
+                "flags": {},
+                "shapes": shapes,
+                "imagePath": image_path,
+                "imageData": base64.b64encode(source.read_bytes()).decode("ascii")
+                if params.embed_image_data
+                else None,
+                "imageHeight": int(image["height"]),
+                "imageWidth": int(image["width"]),
+            }
+            write_json(json_target, document)
+            row.update(
+                status="success",
+                shapes=len(shapes),
+                output=str(json_target.relative_to(output.parent)),
+            )
+            return row, len(shapes), local_skipped
+
+        for completed, result in enumerate(parallel_map(images, process, context), start=1):
+            image = result.item
+            relative = safe_relative_path(str(image["file_name"]))
+            source = image_root / relative
+            if result.error is None and result.value is not None:
+                row, local_shapes, local_skipped = result.value
+                shape_count += local_shapes
+                skipped += local_skipped
                 success += 1
-                row.update(
-                    status="success",
-                    shapes=len(shapes),
-                    output=str(json_target.relative_to(output.parent)),
-                )
-            except TaskCancelled:
-                raise
-            except Exception as exc:
+            else:
                 failures += 1
-                row["error"] = str(exc) or exc.__class__.__name__
+                assert result.error is not None
+                row = {
+                    "source": str(source),
+                    "output": str((output / relative).with_suffix(".json")),
+                    "status": "failed",
+                    "shapes": 0,
+                    "error": str(result.error) or result.error.__class__.__name__,
+                }
                 context.record_failure(str(source), row["error"])
-            rows.append(row)
+            rows[result.index] = row
             context.report_progress(
-                index,
+                completed,
                 len(images),
                 f"正在转换 {relative}",
                 success_count=success,
@@ -156,10 +170,13 @@ class CocoToLabelmeTool(Tool):
             "shapes": shape_count,
             "unsupported_annotations": skipped,
             "elapsed_seconds": round(time.monotonic() - started, 3),
+            "parallel_workers": context.parallel_workers,
         }
         write_json(output.parent / "summary.json", summary)
         write_csv(
-            output.parent / "files.csv", rows, ["source", "output", "status", "shapes", "error"]
+            output.parent / "files.csv",
+            [row for row in rows if row is not None],
+            ["source", "output", "status", "shapes", "error"],
         )
         if success == 0:
             raise RuntimeError("没有成功转换任何 COCO 图像")

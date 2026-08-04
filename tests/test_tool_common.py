@@ -1,8 +1,15 @@
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
-from backend.tools.common import discover_files, transfer_file, validate_output_outside
+from backend.tools.common import (
+    discover_files,
+    parallel_map,
+    transfer_file,
+    validate_output_outside,
+)
 from tests.tool_test_utils import RecordingContext
 
 
@@ -47,3 +54,27 @@ def test_output_cannot_be_nested_in_input(tmp_path: Path) -> None:
     source.mkdir()
     with pytest.raises(ValueError, match="输出目录不能"):
         validate_output_outside(source / "output", [source])
+
+
+def test_parallel_map_uses_multiple_threads_and_keeps_input_indexes(tmp_path: Path) -> None:
+    context = RecordingContext(tmp_path, parallel_workers=3)
+    lock = threading.Lock()
+    active = 0
+    maximum_active = 0
+
+    def work(value: int) -> int:
+        nonlocal active, maximum_active
+        with lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        time.sleep(0.03)
+        with lock:
+            active -= 1
+        return value * 2
+
+    completed = list(parallel_map(range(8), work, context))
+    ordered = [result.value for result in sorted(completed, key=lambda item: item.index)]
+
+    assert maximum_active >= 2
+    assert ordered == [value * 2 for value in range(8)]
+    assert any("3 个线程" in message for message in context.logs)

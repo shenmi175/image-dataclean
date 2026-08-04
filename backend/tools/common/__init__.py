@@ -8,6 +8,7 @@ from backend.tools.common.discovery import (
     find_image,
     image_files,
 )
+from backend.tools.common.parallel import ParallelResult, parallel_map
 from backend.tools.common.paths import (
     require_directory,
     require_file,
@@ -16,8 +17,13 @@ from backend.tools.common.paths import (
     validate_output_outside,
 )
 from backend.tools.common.reports import write_csv, write_json
-from backend.tools.common.schemas import OutputDirectoryParams
-from backend.tools.common.transfer import TransferMode, transfer_file
+from backend.tools.common.schemas import OutputDirectoryParams, ParallelToolParams
+from backend.tools.common.transfer import (
+    TransferMode,
+    atomic_transfer,
+    resolve_transfer_target,
+    transfer_file,
+)
 from backend.tools.common.yolo import (
     read_yolo_classes,
     read_yolo_lines,
@@ -29,9 +35,12 @@ __all__ = [
     "BatchProgress",
     "IMAGE_SUFFIXES",
     "OutputDirectoryParams",
+    "ParallelToolParams",
+    "ParallelResult",
     "TransferMode",
     "VIDEO_SUFFIXES",
     "checkpoint",
+    "atomic_transfer",
     "discover_files",
     "find_image",
     "image_files",
@@ -41,6 +50,8 @@ __all__ = [
     "require_file",
     "safe_name",
     "safe_relative_path",
+    "parallel_map",
+    "resolve_transfer_target",
     "transfer_file",
     "validate_output_outside",
     "validate_yolo_line",

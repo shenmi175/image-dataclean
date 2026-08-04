@@ -5,10 +5,10 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from backend.tools.common import OutputDirectoryParams, validate_output_outside
+from backend.tools.common import ParallelToolParams, validate_output_outside
 
 
-class WebAutoExportParams(OutputDirectoryParams):
+class WebAutoExportParams(ParallelToolParams):
     image_dir: Path = Field(title="图像根目录")
     annotation_dir: Path = Field(title="web-auto 标注目录")
     project_json: Path | None = Field(default=None, title="web_auto_project.json")

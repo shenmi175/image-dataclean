@@ -3,12 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from backend.tools.common import OutputDirectoryParams
+from backend.tools.common import VIDEO_SUFFIXES, ParallelToolParams
 
 
-class VideoFramesParams(OutputDirectoryParams):
+class VideoFramesParams(ParallelToolParams):
+    input_path: Path | None = Field(default=None, title="视频文件或目录")
+    # Compatibility fields for tasks created before input_path was introduced.
     input_files: list[Path] = Field(default_factory=list, title="视频文件")
     input_dir: Path | None = Field(default=None, title="视频目录")
     recursive: bool = Field(default=True, title="递归扫描子目录")
@@ -20,10 +22,27 @@ class VideoFramesParams(OutputDirectoryParams):
         default="letterbox", title="缩放方式"
     )
 
+    @field_validator("input_path", mode="before")
+    @classmethod
+    def normalize_input_path(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
     @model_validator(mode="after")
     def validate_sources(self) -> VideoFramesParams:
+        if self.input_path is not None:
+            source = self.input_path.expanduser()
+            if not source.exists():
+                raise ValueError(f"输入路径不存在: {self.input_path}")
+            if not source.is_file() and not source.is_dir():
+                raise ValueError(f"输入路径不是文件或目录: {self.input_path}")
+            if source.is_file() and source.suffix.lower() not in VIDEO_SUFFIXES:
+                raise ValueError(f"输入文件不是支持的视频格式: {self.input_path}")
+            return self
+
         if not self.input_files and self.input_dir is None:
-            raise ValueError("至少选择一个视频文件或一个视频目录")
+            raise ValueError("请选择一个视频文件或视频目录")
         if self.input_dir is not None and not self.input_dir.expanduser().is_dir():
             raise ValueError(f"视频目录不存在或不是目录: {self.input_dir}")
         invalid_files = [path for path in self.input_files if not path.expanduser().is_file()]

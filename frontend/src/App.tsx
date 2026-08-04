@@ -2,10 +2,9 @@ import {
   AppstoreOutlined,
   ClockCircleOutlined,
   HistoryOutlined,
-  MenuFoldOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
-import { Button, Checkbox, ConfigProvider, Drawer, Layout, Menu, Modal, Radio, Space, Spin, Typography, message } from "antd";
+import { Button, Checkbox, ConfigProvider, Layout, Menu, Modal, Radio, Space, Spin, Typography, message } from "antd";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, Route, Routes, matchPath, useLocation, useNavigate } from "react-router-dom";
 
@@ -13,7 +12,6 @@ import { api, connectEvents } from "./api/client";
 import type { ConnectionState } from "./api/client";
 import type { AppSettings, Task, ToolMetadata } from "./api/types";
 import { ConnectionStatus } from "./components/ConnectionStatus";
-import { TaskCenter } from "./components/TaskCenter";
 import ToolPage from "./pages/ToolPage";
 
 const ActivityPage = lazy(() => import("./pages/ActivityPage"));
@@ -50,7 +48,6 @@ export default function App() {
   const [activeTasks, setActiveTasks] = useState<Task[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
-  const [mobileTasks, setMobileTasks] = useState(false);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [conflictAction, setConflictAction] = useState<"skip" | "overwrite" | "rename">("skip");
   const [applyRemaining, setApplyRemaining] = useState(false);
@@ -153,12 +150,12 @@ export default function App() {
           />
           <div className="sidebar-foot"><ConnectionStatus state={connection} compact /></div>
         </Sider>
-        <Layout>
+        <Layout className="app-main-layout">
           <Header className="topbar">
             <div><Text type="secondary">{currentMeta.section} / </Text><Text strong>{currentMeta.title}</Text></div>
             <Space>
               <ConnectionStatus state={connection} />
-              <Button className="mobile-task-button" icon={<MenuFoldOutlined />} onClick={() => setMobileTasks(true)}>活动 {activeTasks.length}</Button>
+              <Button className="mobile-task-button" icon={<ClockCircleOutlined />} onClick={() => navigate("/activity")}>活动 {activeTasks.length}</Button>
             </Space>
           </Header>
           <Content className="main-content">
@@ -169,14 +166,10 @@ export default function App() {
                 <Route path="/tools/:toolId" element={
                   <ToolPage
                     tool={currentTool}
-                    tools={tools}
-                    activeTasks={activeTasks}
                     settings={settings}
                     reuseTaskId={reuseTaskId}
                     loadingTools={loadingTools}
                     onTaskChanged={handleTaskChanged}
-                    onRefresh={refreshActive}
-                    onOpenActivity={() => navigate("/activity")}
                     onBack={() => navigate("/tools")}
                   />
                 } />
@@ -188,9 +181,6 @@ export default function App() {
             </Suspense>
           </Content>
         </Layout>
-        <Drawer title="活动中心" open={mobileTasks} onClose={() => setMobileTasks(false)} width="92%" destroyOnHidden>
-          {mobileTasks ? <TaskCenter tasks={activeTasks} tools={tools} onChanged={handleTaskChanged} /> : null}
-        </Drawer>
         <Modal title="目标文件已存在" open={Boolean(conflict)} closable={false} maskClosable={false} keyboard={false} okText="确认并继续" cancelButtonProps={{ style: { display: "none" } }} confirmLoading={resolvingConflict} onOk={resolveConflict}>
           {conflict ? <Space direction="vertical" size={16} style={{ width: "100%" }}>
             <div><Text type="secondary">源文件</Text><div className="conflict-path">{conflict.source_path}</div></div>

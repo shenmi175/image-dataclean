@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from backend.tools.common import OutputDirectoryParams, validate_output_outside
+from backend.tools.common import ParallelToolParams, validate_output_outside
 
 
 class LabelmeSource(BaseModel):
@@ -20,7 +20,7 @@ class LabelmeSource(BaseModel):
         return value
 
 
-class LabelmeToYoloParams(OutputDirectoryParams):
+class LabelmeToYoloParams(ParallelToolParams):
     sources: list[LabelmeSource] = Field(min_length=1, title="输入数据源")
     classes: list[str] = Field(min_length=1, title="类别顺序")
     split: str = Field(default="train", min_length=1, title="输出划分名称")

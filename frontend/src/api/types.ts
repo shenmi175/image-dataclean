@@ -19,6 +19,8 @@ export type ToolMetadata = {
   supports_resume_after_restart: boolean;
   capabilities: {
     transfer_modes: Array<"copy" | "move">;
+    supports_parallel: boolean;
+    parallel_strategy: string | null;
   };
   params_schema: {
     properties: Record<string, JsonSchemaProperty>;
@@ -56,6 +58,7 @@ export type JsonSchemaProperty = {
   default?: unknown;
   minimum?: number;
   maximum?: number;
+  multipleOf?: number;
   enum?: string[];
   anyOf?: JsonSchemaProperty[];
   items?: JsonSchemaProperty;
@@ -129,11 +132,15 @@ export type AppSettings = {
   max_workers: number;
   default_max_workers: number;
   recommended_workers: number;
+  parallel_workers: number;
+  default_parallel_workers: number;
+  recommended_parallel_workers: number;
+  cpu_count: number;
   default_output_dir: string | null;
   video_frames: VideoFramesDefaults;
 };
 
 export type SettingsUpdate = Pick<
   AppSettings,
-  "max_workers" | "default_output_dir" | "video_frames"
+  "max_workers" | "parallel_workers" | "default_output_dir" | "video_frames"
 >;

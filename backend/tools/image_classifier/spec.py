@@ -5,10 +5,10 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from backend.tools.common import OutputDirectoryParams, validate_output_outside
+from backend.tools.common import ParallelToolParams, validate_output_outside
 
 
-class ImageClassifierParams(OutputDirectoryParams):
+class ImageClassifierParams(ParallelToolParams):
     input_dir: Path = Field(title="源图像目录")
     recursive: bool = Field(default=True, title="递归扫描子目录")
     operation: Literal["copy", "move"] = Field(default="copy", title="文件操作")

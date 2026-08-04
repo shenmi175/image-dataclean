@@ -20,9 +20,11 @@ class RecordingContext(TaskContext):
         self,
         output_path: Path,
         resolution: tuple[str, str] = ("skip", "current"),
+        parallel_workers: int = 1,
     ) -> None:
         self.task_id = "classifier-test"
         self.output_path = str(output_path)
+        self.parallel_workers = parallel_workers
         self.resolution = resolution
         self.progress: list[tuple[int, int | None]] = []
         self.logs: list[str] = []
@@ -115,6 +117,7 @@ def test_tool_classifies_and_preserves_suffixed_structure(tmp_path: Path) -> Non
     context = RecordingContext(output)
     params = ImageClassifierParams(input_dir=source, output_dir=tmp_path / "output-root")
 
+    context.parallel_workers = 3
     result = ImageClassifierTool().run(params, context)
 
     assert (output / "22102202_rgb" / "彩色_rgb.jpg").is_file()

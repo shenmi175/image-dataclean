@@ -38,6 +38,7 @@ def test_video_tool_is_discoverable() -> None:
     assert {tool["id"] for tool in tools} == {
         "annotation-visualizer",
         "coco-to-labelme",
+        "dinov3-frame-deduplicator",
         "image-rgb-ir-classifier",
         "labelme-to-yolo-seg",
         "video-frames",
@@ -49,6 +50,10 @@ def test_video_tool_is_discoverable() -> None:
     capabilities = {tool["id"]: tool["capabilities"] for tool in tools}
     assert capabilities["image-rgb-ir-classifier"]["transfer_modes"] == ["copy", "move"]
     assert capabilities["yolo-dataset-split"]["transfer_modes"] == ["copy"]
+    video_tool = next(tool for tool in tools if tool["id"] == "video-frames")
+    assert video_tool["ui_schema"]["order"][0] == "input_path"
+    assert "input_files" not in video_tool["ui_schema"]["order"]
+    assert "input_dir" not in video_tool["ui_schema"]["order"]
 
 
 def test_event_stream_keeps_idle_connection_alive_and_delivers_events() -> None:
@@ -77,9 +82,38 @@ def test_video_params_require_a_source() -> None:
     try:
         VideoFramesParams.model_validate({"output_dir": "/tmp"})
     except ValueError as error:
-        assert "至少选择一个视频文件或一个视频目录" in str(error)
+        assert "请选择一个视频文件或视频目录" in str(error)
     else:
         raise AssertionError("source validation did not run")
+
+
+def test_retry_keeps_legacy_video_source_params(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs", max_workers=1)
+    video = tmp_path / "legacy.avi"
+    video.write_bytes(b"legacy task source")
+    output_dir = tmp_path / "outputs"
+    with TestClient(create_app(settings)) as client:
+        database = client.app.state.database
+        database.create_task(
+            task_id="legacy-video-task",
+            tool_id="video-frames",
+            tool_version="1.0.0",
+            params={
+                "input_files": [str(video)],
+                "input_dir": None,
+                "output_dir": str(output_dir),
+            },
+            output_path=str(tmp_path / "legacy_result"),
+        )
+        database.update_task("legacy-video-task", status="failed")
+
+        response = client.post("/api/tasks/legacy-video-task/retry")
+
+        assert response.status_code == 201
+        retried = response.json()
+        assert retried["source_task_id"] == "legacy-video-task"
+        assert retried["params"]["input_path"] is None
+        assert retried["params"]["input_files"] == [str(video)]
 
 
 def test_built_frontend_contains_application_title() -> None:
@@ -133,6 +167,7 @@ def test_settings_persist_and_reset(tmp_path: Path) -> None:
             "/api/settings",
             json={
                 "max_workers": 3,
+                "parallel_workers": 2,
                 "default_output_dir": str(tmp_path / "outputs"),
                 "video_frames": {
                     "recursive": False,
@@ -146,14 +181,17 @@ def test_settings_persist_and_reset(tmp_path: Path) -> None:
         )
         assert response.status_code == 200
         assert response.json()["max_workers"] == 3
+        assert response.json()["parallel_workers"] == 2
         assert client.app.state.task_manager.max_workers == 3
 
     with TestClient(create_app(settings)) as client:
         persisted = client.get("/api/settings").json()
         assert persisted["max_workers"] == 3
+        assert persisted["parallel_workers"] == 2
         assert persisted["video_frames"]["frame_interval"] == 25
         reset = client.post("/api/settings/reset").json()
         assert reset["max_workers"] == 2
+        assert reset["parallel_workers"] == 0
         assert reset["default_output_dir"] is None
         assert reset["video_frames"]["frame_interval"] == 10
 

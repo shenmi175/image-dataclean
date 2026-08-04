@@ -29,10 +29,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             database,
             broker,
             max_workers=resolved_settings.max_workers,
+            parallel_workers=resolved_settings.parallel_workers,
             cancel_timeout=resolved_settings.cancel_timeout,
         )
         application.state.settings = resolved_settings
         application.state.default_max_workers = resolved_settings.max_workers
+        application.state.default_parallel_workers = resolved_settings.parallel_workers
         application.state.database = database
         application.state.event_broker = broker
         application.state.task_manager = task_manager
@@ -44,7 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(
         title="Automation Toolbox API",
-        version="0.3.0",
+        version="0.3.1",
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
         lifespan=lifespan,

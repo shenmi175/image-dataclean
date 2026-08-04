@@ -7,17 +7,17 @@ from typing import Any
 
 from PIL import Image
 
-from backend.tools.base import TaskCancelled, TaskContext, Tool
+from backend.tools.base import TaskContext, Tool, ToolCapabilities
 from backend.tools.common import (
     IMAGE_SUFFIXES,
-    checkpoint,
+    parallel_map,
     safe_name,
     transfer_file,
     write_csv,
     write_json,
     write_yolo_yaml,
 )
-from backend.tools.labelme_to_yolo.spec import LabelmeToYoloParams
+from backend.tools.labelme_to_yolo.spec import LabelmeSource, LabelmeToYoloParams
 
 
 def image_for_json(json_path: Path, data: dict[str, Any]) -> Path:
@@ -80,6 +80,7 @@ class LabelmeToYoloTool(Tool):
     version = "1.0.0"
     description = "将一个或多个 Labelme 多边形目录转换为标准 YOLO segmentation 数据集。"
     params_model = LabelmeToYoloParams
+    capabilities = ToolCapabilities(supports_parallel=True, parallel_strategy="thread")
     ui_schema = {
         "order": [
             "sources",
@@ -114,70 +115,57 @@ class LabelmeToYoloTool(Tool):
         ]
         if not items:
             raise ValueError("没有找到 Labelme JSON 文件")
-        rows: list[dict[str, Any]] = []
+        rows: list[dict[str, Any] | None] = [None] * len(items)
         success = failures = shapes = skipped_shapes = unknown_shapes = 0
         started = time.monotonic()
-        for index, (source, json_path, relative) in enumerate(items, start=1):
-            checkpoint(context)
+        def process(
+            item: tuple[LabelmeSource, Path, Path]
+        ) -> tuple[str, str, int, int, int]:
+            source, json_path, relative = item
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            image = image_for_json(json_path, data)
+            lines, skipped, unknown = yolo_lines(
+                data, image, class_ids, params.unknown_label_policy == "skip"
+            )
+            if not lines and not params.include_empty:
+                return "skipped_empty", "", 0, skipped, unknown
+            stem = "__".join(
+                [safe_name(source.name), *map(safe_name, relative.with_suffix("").parts)]
+            )
+            image_target = image_output / f"{stem}{image.suffix.lower()}"
+            copied = transfer_file(image, image_target, context)
+            if copied is None:
+                raise RuntimeError("目标冲突已跳过")
+            label_target = label_output / f"{copied.stem}.txt"
+            label_target.write_text(
+                "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
+            )
+            return "success", str(label_target.relative_to(output)), len(lines), skipped, unknown
+
+        for completed, result in enumerate(parallel_map(items, process, context), start=1):
+            _source, json_path, relative = result.item
             row: dict[str, Any] = {
                 "source": str(json_path),
                 "output": "",
                 "status": "failed",
                 "error": "",
             }
-            try:
-                data = json.loads(json_path.read_text(encoding="utf-8"))
-                image = image_for_json(json_path, data)
-                lines, skipped, unknown = yolo_lines(
-                    data, image, class_ids, params.unknown_label_policy == "skip"
-                )
+            if result.error is None and result.value is not None:
+                status, output_name, line_count, skipped, unknown = result.value
                 skipped_shapes += skipped
                 unknown_shapes += unknown
-                if not lines and not params.include_empty:
-                    row["status"] = "skipped_empty"
-                    rows.append(row)
-                    context.report_progress(
-                        index,
-                        len(items),
-                        f"已跳过空标注 {relative}",
-                        success_count=success,
-                        failure_count=failures,
-                    )
-                    continue
-                stem = "__".join(
-                    [safe_name(source.name), *map(safe_name, relative.with_suffix("").parts)]
-                )
-                image_target = image_output / f"{stem}{image.suffix.lower()}"
-                copied = transfer_file(image, image_target, context)
-                if copied is None:
-                    failures += 1
-                    row["error"] = "目标冲突已跳过"
-                    context.record_failure(str(json_path), row["error"])
-                    rows.append(row)
-                    context.report_progress(
-                        index,
-                        len(items),
-                        f"已跳过冲突 {relative}",
-                        success_count=success,
-                        failure_count=failures,
-                    )
-                    continue
-                label_target = label_output / f"{copied.stem}.txt"
-                label_target.write_text(
-                    "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
-                )
-                shapes += len(lines)
-                success += 1
-                row.update(output=str(label_target.relative_to(output)), status="success")
-            except TaskCancelled:
-                raise
-            except Exception as exc:
+                shapes += line_count
+                row.update(output=output_name, status=status)
+                if status == "success":
+                    success += 1
+            else:
                 failures += 1
-                row["error"] = str(exc) or exc.__class__.__name__
+                assert result.error is not None
+                row["error"] = str(result.error) or result.error.__class__.__name__
                 context.record_failure(str(json_path), row["error"])
-            rows.append(row)
+            rows[result.index] = row
             context.report_progress(
-                index,
+                completed,
                 len(items),
                 f"正在转换 {relative}",
                 success_count=success,
@@ -193,9 +181,14 @@ class LabelmeToYoloTool(Tool):
             "skipped_shapes": skipped_shapes,
             "unknown_shapes": unknown_shapes,
             "elapsed_seconds": round(time.monotonic() - started, 3),
+            "parallel_workers": context.parallel_workers,
         }
         write_json(output / "summary.json", summary)
-        write_csv(output / "files.csv", rows, ["source", "output", "status", "error"])
+        write_csv(
+            output / "files.csv",
+            [row for row in rows if row is not None],
+            ["source", "output", "status", "error"],
+        )
         if success == 0:
             raise RuntimeError("没有成功转换任何 Labelme 标注")
         return {

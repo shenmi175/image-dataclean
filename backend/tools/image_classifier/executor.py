@@ -7,11 +7,12 @@ from typing import Any, Literal
 import numpy as np
 from PIL import Image
 
-from backend.tools.base import TaskCancelled, TaskContext, Tool, ToolCapabilities
+from backend.tools.base import TaskContext, Tool, ToolCapabilities
 from backend.tools.common import (
     IMAGE_SUFFIXES,
     BatchProgress,
     discover_files,
+    parallel_map,
     transfer_file,
     write_json,
 )
@@ -87,7 +88,11 @@ class ImageClassifierTool(Tool):
     version = "1.0.0"
     description = "根据像素通道差异区分 RGB 与灰度/红外候选图像，并保持目录结构输出。"
     params_model = ImageClassifierParams
-    capabilities = ToolCapabilities(transfer_modes=("copy", "move"))
+    capabilities = ToolCapabilities(
+        transfer_modes=("copy", "move"),
+        supports_parallel=True,
+        parallel_strategy="thread",
+    )
     ui_schema = {
         "order": [
             "input_dir",
@@ -125,27 +130,29 @@ class ImageClassifierTool(Tool):
         labels = {"rgb": 0, "ir": 0}
         skipped = 0
 
-        for index, (source, relative) in enumerate(images, start=1):
-            progress.checkpoint()
-            try:
-                label, _features = classify_pixels(
-                    load_rgb(source), params.threshold, params.tolerance
-                )
-                if params.output_category != "all" and label != params.output_category:
-                    skipped += 1
-                    continue
-                target = output_root / output_relative_path(relative, label, params.layout)
-                placed = transfer_file(source, target, context, mode=params.operation)
-                if placed is None:
-                    raise RuntimeError(f"目标已存在，已跳过: {target}")
+        def process(item: tuple[Path, Path]) -> ImageLabel | None:
+            source, relative = item
+            label, _features = classify_pixels(
+                load_rgb(source), params.threshold, params.tolerance
+            )
+            if params.output_category != "all" and label != params.output_category:
+                return None
+            target = output_root / output_relative_path(relative, label, params.layout)
+            placed = transfer_file(source, target, context, mode=params.operation)
+            if placed is None:
+                raise RuntimeError(f"目标已存在，已跳过: {target}")
+            return label
+
+        for completed, result in enumerate(parallel_map(images, process, context), start=1):
+            source, relative = result.item
+            if result.error is not None:
+                progress.failure(str(source), result.error)
+            elif result.value is None:
+                skipped += 1
+            else:
                 progress.success()
-                labels[label] += 1
-            except TaskCancelled:
-                raise
-            except Exception as exc:
-                progress.failure(str(source), exc)
-            finally:
-                progress.report(index, f"正在处理 {relative}")
+                labels[result.value] += 1
+            progress.report(completed, f"正在处理 {relative}")
 
         if progress.success_count == 0 and skipped == len(images):
             raise RuntimeError("没有找到符合输出类别的图像")
@@ -165,6 +172,7 @@ class ImageClassifierTool(Tool):
             "skipped": skipped,
             "success": progress.success_count,
             "failures": progress.failure_count,
+            "parallel_workers": context.parallel_workers,
         })
         return {
             "output_path": str(output_root),

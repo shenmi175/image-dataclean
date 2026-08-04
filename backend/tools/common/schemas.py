@@ -14,3 +14,12 @@ class OutputDirectoryParams(BaseModel):
         if value.expanduser().exists() and not value.expanduser().is_dir():
             raise ValueError(f"输出路径不是目录: {value}")
         return value
+
+
+class ParallelToolParams(OutputDirectoryParams):
+    parallel_workers: int = Field(
+        default=0,
+        ge=0,
+        le=32,
+        title="并行线程数（0 为自动）",
+    )

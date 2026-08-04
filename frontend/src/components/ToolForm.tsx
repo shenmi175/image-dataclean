@@ -10,6 +10,7 @@ import {
   Space,
   Switch,
   message,
+  notification,
 } from "antd";
 import { useEffect, useMemo, useState } from "react";
 
@@ -55,7 +56,7 @@ function FileListField({
     }
   };
   return (
-    <Space.Compact block>
+    <Space.Compact block className="path-picker multiline-picker">
       <Input.TextArea
         value={value.join("\n")}
         autoSize={{ minRows: 2, maxRows: 5 }}
@@ -100,9 +101,64 @@ function FileField({
     }
   };
   return (
-    <Space.Compact block>
+    <Space.Compact block className="path-picker">
       <Input value={value} onChange={(event) => onChange?.(event.target.value)} />
       <Button icon={<FileAddOutlined />} loading={busy} onClick={browse}>浏览</Button>
+    </Space.Compact>
+  );
+}
+
+function FileOrDirectoryField({
+  value,
+  onChange,
+  extensions = [],
+  title = "选择视频文件或目录",
+}: {
+  value?: string;
+  onChange?: (v: string) => void;
+  extensions?: string[];
+  title?: string;
+}) {
+  const [busy, setBusy] = useState<"file" | "directory" | null>(null);
+  const selectFile = async () => {
+    setBusy("file");
+    try {
+      const result = await api.selectFiles({ title, extensions, multiple: false });
+      if (result.paths[0]) onChange?.(result.paths[0]);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const selectDirectory = async () => {
+    setBusy("directory");
+    try {
+      const result = await api.selectDirectory();
+      if (result.path) onChange?.(result.path);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <Space.Compact block className="path-picker dual-path-picker">
+      <Input
+        value={value}
+        placeholder="输入路径，或选择单个视频/目录"
+        onChange={(event) => onChange?.(event.target.value)}
+      />
+      <Button icon={<FileAddOutlined />} loading={busy === "file"} onClick={selectFile}>
+        选文件
+      </Button>
+      <Button
+        icon={<FolderOpenOutlined />}
+        loading={busy === "directory"}
+        onClick={selectDirectory}
+      >
+        选目录
+      </Button>
     </Space.Compact>
   );
 }
@@ -237,7 +293,7 @@ function DirectoryField({ value, onChange, title }: { value?: string; onChange?:
     }
   };
   return (
-    <Space.Compact block>
+    <Space.Compact block className="path-picker">
       <Input value={value} onChange={(event) => onChange?.(event.target.value)} />
       <Button icon={<FolderOpenOutlined />} loading={busy} onClick={browse} title={title}>
         浏览
@@ -262,7 +318,7 @@ function DirectoryListField({ value = [], onChange }: { value?: string[]; onChan
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
       {value.map((path, index) => (
-        <Space.Compact block key={`${path}:${index}`}>
+        <Space.Compact block className="path-picker" key={`${path}:${index}`}>
           <Input value={path} onChange={(event) => onChange?.(value.map((item, itemIndex) => itemIndex === index ? event.target.value : item))} />
           <Button danger icon={<DeleteOutlined />} onClick={() => onChange?.(value.filter((_, itemIndex) => itemIndex !== index))} />
         </Space.Compact>
@@ -294,7 +350,12 @@ export function ToolForm({ tool, onCreated, initialOverrides = {} }: Props) {
     setSubmitting(true);
     try {
       const task = await api.createTask(tool.id, values);
-      message.success("任务已创建，将按并发限制自动执行");
+      notification.success({
+        placement: "bottomRight",
+        duration: 5,
+        message: `${tool.name}任务已创建`,
+        description: "可前往活动中心查看进度",
+      });
       onCreated(task);
     } catch (error) {
       message.error((error as Error).message);
@@ -310,6 +371,12 @@ export function ToolForm({ tool, onCreated, initialOverrides = {} }: Props) {
     if (widget === "directory-list") return <DirectoryListField />;
     if (widget === "directory") return <DirectoryField title={pickerTitle} />;
     if (widget === "file") return <FileField title={pickerTitle} extensions={tool.ui_schema.file_filters?.[name]} />;
+    if (widget === "file-or-directory") {
+      return <FileOrDirectoryField
+        title={pickerTitle}
+        extensions={tool.ui_schema.file_filters?.[name]}
+      />;
+    }
     if (widget === "string-list") return <StringListField />;
     if (widget === "object-list") {
       return <ObjectListField
@@ -336,7 +403,12 @@ export function ToolForm({ tool, onCreated, initialOverrides = {} }: Props) {
     const type = schemaType(schema);
     if (type === "boolean") return <Switch />;
     if (type === "integer" || type === "number") {
-      return <InputNumber min={schema.minimum} max={schema.maximum} style={{ width: "100%" }} />;
+      return <InputNumber
+        min={schema.minimum}
+        max={schema.maximum}
+        step={schema.multipleOf ?? (type === "number" ? 0.01 : 1)}
+        style={{ width: "100%" }}
+      />;
     }
     return <Input />;
   };
@@ -373,7 +445,7 @@ export function ToolForm({ tool, onCreated, initialOverrides = {} }: Props) {
               valuePropName={schemaType(schema) === "boolean" ? "checked" : "value"}
               className={
                 tool.ui_schema.full_width?.includes(name)
-                || ["file-list", "directory-list", "directory", "object-list"].includes(tool.ui_schema.widgets?.[name] ?? "")
+                || ["file-list", "directory-list", "directory", "file", "file-or-directory", "object-list", "string-list", "key-value"].includes(tool.ui_schema.widgets?.[name] ?? "")
                   ? "wide" : ""
               }
             >

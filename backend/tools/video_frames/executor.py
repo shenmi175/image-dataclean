@@ -8,8 +8,14 @@ from typing import Any
 import cv2
 import numpy as np
 
-from backend.tools.base import TaskContext, Tool
-from backend.tools.common import VIDEO_SUFFIXES, checkpoint, discover_files
+from backend.tools.base import TaskContext, Tool, ToolCapabilities
+from backend.tools.common import (
+    VIDEO_SUFFIXES,
+    checkpoint,
+    discover_files,
+    parallel_map,
+    write_json,
+)
 from backend.tools.video_frames.spec import VideoFramesParams
 
 VIDEO_EXTENSIONS = VIDEO_SUFFIXES
@@ -57,13 +63,26 @@ def write_jpeg(path: Path, image: np.ndarray, quality: int = 95) -> bool:
 
 def discover_videos(params: VideoFramesParams) -> list[tuple[Path, Path | None]]:
     candidates: list[tuple[Path, Path | None]] = []
-    if params.input_dir is not None:
+    if params.input_path is not None:
+        source = params.input_path.expanduser().resolve()
+        if source.is_file():
+            candidates.append((source, None))
+        else:
+            candidates.extend(
+                (path, source)
+                for path in discover_files(
+                    source, VIDEO_EXTENSIONS, recursive=params.recursive
+                )
+            )
+    elif params.input_dir is not None:
         root = params.input_dir.expanduser().resolve()
         candidates.extend(
             (path, root)
             for path in discover_files(root, VIDEO_EXTENSIONS, recursive=params.recursive)
         )
-    candidates.extend((path.expanduser().resolve(), None) for path in params.input_files)
+        candidates.extend((path.expanduser().resolve(), None) for path in params.input_files)
+    else:
+        candidates.extend((path.expanduser().resolve(), None) for path in params.input_files)
 
     discovered: dict[str, tuple[Path, Path | None]] = {}
     for path, root in candidates:
@@ -97,10 +116,10 @@ class VideoFramesTool(Tool):
     version = "1.0.0"
     description = "按固定帧间隔批量提取视频画面，可选等比填充或直接缩放。"
     params_model = VideoFramesParams
+    capabilities = ToolCapabilities(supports_parallel=True, parallel_strategy="thread")
     ui_schema = {
         "order": [
-            "input_files",
-            "input_dir",
+            "input_path",
             "recursive",
             "output_dir",
             "frame_interval",
@@ -110,15 +129,17 @@ class VideoFramesTool(Tool):
             "resize_mode",
         ],
         "widgets": {
-            "input_files": "file-list",
-            "input_dir": "directory",
+            "input_path": "file-or-directory",
             "output_dir": "directory",
             "resize_mode": "radio",
         },
-        "file_filters": {"input_files": sorted(VIDEO_EXTENSIONS)},
-        "picker_titles": {"input_files": "选择视频文件"},
+        "file_filters": {"input_path": sorted(VIDEO_EXTENSIONS)},
+        "picker_titles": {"input_path": "选择视频文件或目录"},
         "submit_label": "创建视频转图片任务",
-        "notice": "文件和目录可同时使用，重复视频会自动去重。每次任务都会创建独立输出目录。",
+        "notice": (
+            "请选择单个视频或一个视频目录；目录是否扫描子目录由递归选项控制。"
+            "每次任务都会创建独立输出目录。"
+        ),
     }
 
     def run(self, params: VideoFramesParams, context: TaskContext) -> dict[str, Any]:
@@ -129,6 +150,8 @@ class VideoFramesTool(Tool):
         output_root = Path(context.output_path)
         output_root.mkdir(parents=True, exist_ok=True)
         context.log("info", f"发现 {len(videos)} 个视频")
+        if context.parallel_workers > 1:
+            cv2.setNumThreads(1)
 
         total_frames = 0
         all_totals_known = True
@@ -161,29 +184,50 @@ class VideoFramesTool(Tool):
             destination = output_root / relative_folder
             frame_index = 0
             video_written = 0
-            try:
+
+            def frames(  # type: ignore[no-untyped-def]
+                capture=capture,
+                destination=destination,
+                video_stem=video.stem,
+            ):
+                nonlocal current, frame_index
                 while True:
                     checkpoint(context)
                     ok, frame = capture.read()
                     if not ok:
-                        break
+                        return
                     current += 1
-                    if frame_index % params.frame_interval == 0:
-                        if params.resize:
-                            size = (params.width, params.height)
-                            frame = (
-                                letterbox_resize(frame, size)
-                                if params.resize_mode == "letterbox"
-                                else direct_resize(frame, size)
-                            )
-                        target = destination / f"{video.stem}_{frame_index:06d}.jpg"
-                        if write_jpeg(target, frame):
-                            written += 1
-                            video_written += 1
-                        else:
-                            failures += 1
-                            context.record_failure(str(target), "JPEG 写入失败")
+                    current_index = frame_index
                     frame_index += 1
+                    if current_index % params.frame_interval != 0:
+                        continue
+                    target = destination / f"{video_stem}_{current_index:06d}.jpg"
+                    yield target, frame
+
+            def encode(item: tuple[Path, np.ndarray]) -> Path:
+                target, frame = item
+                if params.resize:
+                    size = (params.width, params.height)
+                    frame = (
+                        letterbox_resize(frame, size)
+                        if params.resize_mode == "letterbox"
+                        else direct_resize(frame, size)
+                    )
+                if not write_jpeg(target, frame):
+                    raise RuntimeError("JPEG 写入失败")
+                return target
+
+            try:
+                for result in parallel_map(frames(), encode, context):
+                    target, _frame = result.item
+                    if result.error is None:
+                        written += 1
+                        video_written += 1
+                    else:
+                        failures += 1
+                        context.record_failure(
+                            str(target), str(result.error) or result.error.__class__.__name__
+                        )
                     elapsed = max(time.monotonic() - started, 0.001)
                     context.report_progress(
                         current,
@@ -210,6 +254,19 @@ class VideoFramesTool(Tool):
             success_count=written,
             failure_count=failures,
             force=True,
+        )
+        write_json(
+            output_root / "summary.json",
+            {
+                "tool": self.id,
+                "videos": len(videos),
+                "successful_videos": successful_videos,
+                "frames_read": current,
+                "images_written": written,
+                "failures": failures,
+                "parallel_workers": context.parallel_workers,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+            },
         )
         return {
             "output_path": str(output_root),

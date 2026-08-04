@@ -5,10 +5,10 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from backend.tools.common import OutputDirectoryParams, validate_output_outside
+from backend.tools.common import ParallelToolParams, validate_output_outside
 
 
-class CocoToLabelmeParams(OutputDirectoryParams):
+class CocoToLabelmeParams(ParallelToolParams):
     coco_json: Path = Field(title="COCO 标注 JSON")
     image_dir: Path = Field(title="图像根目录")
     copy_images: bool = Field(default=True, title="复制图片")

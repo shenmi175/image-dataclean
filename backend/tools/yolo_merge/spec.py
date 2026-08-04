@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from backend.tools.common import OutputDirectoryParams, validate_output_outside
+from backend.tools.common import ParallelToolParams, validate_output_outside
 
 
 class YoloSource(BaseModel):
@@ -21,7 +21,7 @@ class YoloSource(BaseModel):
         return value
 
 
-class YoloMergeParams(OutputDirectoryParams):
+class YoloMergeParams(ParallelToolParams):
     sources: list[YoloSource] = Field(min_length=1, title="输入数据源")
     output_classes: list[str] = Field(min_length=1, title="输出类别顺序")
     splits: list[str] = Field(

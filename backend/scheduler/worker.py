@@ -13,6 +13,7 @@ def run_task_worker(
     tool_id: str,
     params: dict[str, Any],
     output_path: str,
+    parallel_workers: int,
     pause_event: Any,
     cancel_event: Any,
     message_queue: Any,
@@ -21,6 +22,7 @@ def run_task_worker(
     context = WorkerTaskContext(
         task_id,
         output_path,
+        parallel_workers,
         pause_event,
         cancel_event,
         message_queue,

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.core.compat import UTC
+from backend.core.settings import available_cpu_count, recommended_parallel_workers
 from backend.infrastructure.database import Database, utc_now
 from backend.scheduler.events import EventBroker
 from backend.scheduler.models import TERMINAL_STATUSES, TaskStatus
@@ -36,11 +37,13 @@ class TaskManager:
         broker: EventBroker,
         *,
         max_workers: int,
+        parallel_workers: int = 0,
         cancel_timeout: float = 5.0,
     ) -> None:
         self.database = database
         self.broker = broker
         self.max_workers = max_workers
+        self.parallel_workers = parallel_workers
         self.cancel_timeout = cancel_timeout
         self._context = multiprocessing.get_context("spawn")
         self._running: dict[str, RunningTask] = {}
@@ -53,6 +56,9 @@ class TaskManager:
         stored_workers = self.database.get_setting("max_workers")
         if isinstance(stored_workers, int) and 1 <= stored_workers <= 32:
             self.max_workers = stored_workers
+        stored_parallel_workers = self.database.get_setting("parallel_workers")
+        if isinstance(stored_parallel_workers, int) and 0 <= stored_parallel_workers <= 32:
+            self.parallel_workers = stored_parallel_workers
         self.database.mark_interrupted()
         self._stopping = False
         self._loop_task = asyncio.create_task(self._run_loop())
@@ -199,6 +205,19 @@ class TaskManager:
             raise ValueError("并发任务数必须在 1 到 32 之间")
         self.max_workers = value
 
+    def set_parallel_workers(self, value: int) -> None:
+        if not 0 <= value <= 32:
+            raise ValueError("单任务并行数必须在 0 到 32 之间")
+        self.parallel_workers = value
+
+    def effective_parallel_workers(self, params: dict[str, Any]) -> int:
+        requested = params.get("parallel_workers", self.parallel_workers)
+        if not isinstance(requested, int) or requested <= 0:
+            requested = self.parallel_workers
+        if requested <= 0:
+            requested = recommended_parallel_workers(self.max_workers)
+        return max(1, min(32, requested, available_cpu_count()))
+
     async def _run_loop(self) -> None:
         while not self._stopping:
             try:
@@ -228,6 +247,7 @@ class TaskManager:
                     task["tool_id"],
                     task["params"],
                     task["output_path"],
+                    self.effective_parallel_workers(task["params"]),
                     pause_event,
                     cancel_event,
                     message_queue,

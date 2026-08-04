@@ -1,37 +1,69 @@
-import { AppstoreOutlined, ArrowLeftOutlined, ArrowRightOutlined, PictureOutlined, VideoCameraOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, ArrowLeftOutlined, ClearOutlined, PictureOutlined, VideoCameraOutlined } from "@ant-design/icons";
 import { Button, Card, Result, Spin, Typography, message } from "antd";
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
 import type { AppSettings, Task, ToolMetadata } from "../api/types";
-import { TaskCenter } from "../components/TaskCenter";
 import { ToolForm } from "../components/ToolForm";
 
 const { Title, Paragraph, Text } = Typography;
 
 type Props = {
   tool?: ToolMetadata;
-  tools: ToolMetadata[];
-  activeTasks: Task[];
   settings: AppSettings | null;
   reuseTaskId: string | null;
   loadingTools: boolean;
   onTaskChanged: (task: Task) => void;
-  onRefresh: () => void;
-  onOpenActivity: () => void;
   onBack: () => void;
 };
 
+function normalizeReuseParams(
+  toolId: string,
+  params: Record<string, unknown>,
+): { params: Record<string, unknown>; warning?: string } {
+  if (toolId !== "video-frames") return { params };
+
+  const normalized = { ...params };
+  const inputPath = typeof normalized.input_path === "string" && normalized.input_path
+    ? normalized.input_path
+    : null;
+  const inputDir = typeof normalized.input_dir === "string" && normalized.input_dir
+    ? normalized.input_dir
+    : null;
+  const inputFiles = Array.isArray(normalized.input_files)
+    ? normalized.input_files.filter((item): item is string => typeof item === "string" && Boolean(item))
+    : [];
+
+  delete normalized.input_files;
+  delete normalized.input_dir;
+  if (inputPath) {
+    normalized.input_path = inputPath;
+    return { params: normalized };
+  }
+
+  delete normalized.input_path;
+  const oldSources = [...(inputDir ? [inputDir] : []), ...inputFiles];
+  if (oldSources.length === 1) {
+    normalized.input_path = oldSources[0];
+    return { params: normalized };
+  }
+  if (oldSources.length > 1) {
+    return {
+      params: normalized,
+      warning: inputFiles.length > 1 && !inputDir
+        ? "旧任务包含多个离散视频，请重新选择单个视频或包含这些视频的目录。"
+        : "旧任务包含多个输入来源，请重新选择单个视频或一个视频目录。",
+    };
+  }
+  return { params: normalized };
+}
+
 export default function ToolPage({
   tool,
-  tools,
-  activeTasks,
   settings,
   reuseTaskId,
   loadingTools,
   onTaskChanged,
-  onRefresh,
-  onOpenActivity,
   onBack,
 }: Props) {
   const [reuseParams, setReuseParams] = useState<Record<string, unknown> | null>(null);
@@ -48,7 +80,9 @@ export default function ToolPage({
       .then((task) => {
         if (cancelled) return;
         if (task.tool_id !== tool.id) throw new Error("历史任务与当前工具不匹配");
-        setReuseParams(task.params);
+        const reuse = normalizeReuseParams(tool.id, task.params);
+        setReuseParams(reuse.params);
+        if (reuse.warning) message.warning(reuse.warning);
       })
       .catch((error) => {
         if (!cancelled) message.error(`无法复用历史参数：${(error as Error).message}`);
@@ -62,13 +96,17 @@ export default function ToolPage({
   const initialValues = useMemo(
     () => ({
       ...(tool?.id === "video-frames" ? settings?.video_frames ?? {} : {}),
+      ...(tool?.capabilities.supports_parallel && settings
+        ? { parallel_workers: settings.parallel_workers }
+        : {}),
       ...(settings?.default_output_dir ? { output_dir: settings.default_output_dir } : {}),
       ...(reuseParams ?? {}),
     }),
     [reuseParams, settings, tool?.id],
   );
   const heroIcon =
-    tool?.id === "video-frames" ? <VideoCameraOutlined />
+    tool?.id === "dinov3-frame-deduplicator" ? <ClearOutlined />
+      : tool?.id === "video-frames" ? <VideoCameraOutlined />
       : tool?.id === "image-rgb-ir-classifier" ? <PictureOutlined />
         : <AppstoreOutlined />;
 
@@ -107,23 +145,6 @@ export default function ToolPage({
           )}
         </Card>
       </main>
-      <aside className="task-column">
-        <div className="panel-heading">
-          <div>
-            <Title level={4}>当前活动</Title>
-            <Text type="secondary">{activeTasks.length} 个活动任务</Text>
-          </div>
-          <Button size="small" onClick={onRefresh}>
-            刷新
-          </Button>
-        </div>
-        <TaskCenter tasks={activeTasks} tools={tools} onChanged={onTaskChanged} compact />
-        {activeTasks.length > 6 ? (
-          <Button type="link" icon={<ArrowRightOutlined />} onClick={onOpenActivity} block>
-            查看全部活动
-          </Button>
-        ) : null}
-      </aside>
     </div>
   );
 }

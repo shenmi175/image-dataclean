@@ -5,8 +5,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from backend.tools.base import TaskCancelled, TaskContext, Tool
-from backend.tools.common import checkpoint, transfer_file, write_csv, write_json
+from backend.tools.base import TaskContext, Tool, ToolCapabilities
+from backend.tools.common import parallel_map, transfer_file, write_csv, write_json
 from backend.tools.web_auto_export.coco import build_coco
 from backend.tools.web_auto_export.common import (
     annotation_label,
@@ -32,6 +32,7 @@ class WebAutoExportTool(Tool):
     version = "1.0.0"
     description = "将 web-auto UUID5 多边形标注导出为 Labelme 或 COCO 数据集。"
     params_model = WebAutoExportParams
+    capabilities = ToolCapabilities(supports_parallel=True, parallel_strategy="thread")
     ui_schema = {
         "order": [
             "image_dir",
@@ -92,14 +93,17 @@ class WebAutoExportTool(Tool):
         if not classes and params.output_format == "coco":
             raise ValueError("无法确定类别顺序")
 
-        rows: list[dict[str, Any]] = []
+        rows: list[dict[str, Any] | None] = [None] * len(all_items)
         success = failures = missing = skipped_shapes = 0
         started = time.monotonic()
-        coco_groups: dict[str, list[tuple[Path, str, list[dict[str, Any]]]]] = {}
-        for index, (split, image, relative, ann_path, source_annotations) in enumerate(
-            all_items, start=1
-        ):
-            checkpoint(context)
+        coco_by_index: dict[
+            int, tuple[str, tuple[Path, str, list[dict[str, Any]]]]
+        ] = {}
+
+        def process(
+            item: tuple[str, Path, str, Path, list[dict[str, Any]]]
+        ) -> tuple[dict[str, Any], int, int, tuple[Path, str, list[dict[str, Any]]] | None]:
+            split, image, relative, ann_path, source_annotations = item
             row = {
                 "source": str(image),
                 "annotation": str(ann_path),
@@ -107,54 +111,68 @@ class WebAutoExportTool(Tool):
                 "status": "failed",
                 "error": "",
             }
-            try:
-                if not ann_path.exists():
-                    missing += 1
-                copied: Path | None = None
-                if params.copy_images:
-                    target = (
-                        output
-                        / ("labelme" if params.output_format == "labelme" else "images")
-                        / relative
-                    )
-                    copied = transfer_file(image, target, context)
-                    if copied is None:
-                        raise RuntimeError("目标冲突已跳过")
-                if params.output_format == "labelme":
-                    json_target = (output / "labelme" / relative).with_suffix(".json")
-                    document, skipped = labelme_document(
-                        image,
-                        json_target,
-                        source_annotations,
-                        copied_image=copied,
-                        embed_image_data=params.embed_image_data,
-                    )
-                    write_json(json_target, document)
-                    skipped_shapes += skipped
-                    row["output"] = str(json_target.relative_to(output))
-                else:
-                    coco_file_name = (
-                        copied.relative_to(output / "images").as_posix()
-                        if copied is not None
-                        else relative
-                    )
-                    coco_groups.setdefault(split, []).append(
-                        (image, coco_file_name, source_annotations)
-                    )
-                    row["output"] = (
-                        f"annotations/instances_{'root' if split == '.' else split}.json"
-                    )
+            local_missing = int(not ann_path.exists())
+            copied: Path | None = None
+            if params.copy_images:
+                target = (
+                    output
+                    / ("labelme" if params.output_format == "labelme" else "images")
+                    / relative
+                )
+                copied = transfer_file(image, target, context)
+                if copied is None:
+                    raise RuntimeError("目标冲突已跳过")
+            if params.output_format == "labelme":
+                json_target = (output / "labelme" / relative).with_suffix(".json")
+                document, local_skipped = labelme_document(
+                    image,
+                    json_target,
+                    source_annotations,
+                    copied_image=copied,
+                    embed_image_data=params.embed_image_data,
+                )
+                write_json(json_target, document)
+                row["output"] = str(json_target.relative_to(output))
+                coco_item = None
+            else:
+                local_skipped = 0
+                coco_file_name = (
+                    copied.relative_to(output / "images").as_posix()
+                    if copied is not None
+                    else relative
+                )
+                coco_item = (image, coco_file_name, source_annotations)
+                row["output"] = (
+                    f"annotations/instances_{'root' if split == '.' else split}.json"
+                )
+            row["status"] = "success"
+            return row, local_missing, local_skipped, coco_item
+
+        for completed, result in enumerate(
+            parallel_map(all_items, process, context), start=1
+        ):
+            split, image, relative, ann_path, _source_annotations = result.item
+            if result.error is None and result.value is not None:
+                row, local_missing, local_skipped, coco_item = result.value
+                missing += local_missing
+                skipped_shapes += local_skipped
+                if coco_item is not None:
+                    coco_by_index[result.index] = (split, coco_item)
                 success += 1
-                row["status"] = "success"
-            except TaskCancelled:
-                raise
-            except Exception as exc:
+            else:
                 failures += 1
-                row["error"] = str(exc) or exc.__class__.__name__
+                assert result.error is not None
+                row = {
+                    "source": str(image),
+                    "annotation": str(ann_path),
+                    "output": "",
+                    "status": "failed",
+                    "error": str(result.error) or result.error.__class__.__name__,
+                }
                 context.record_failure(str(image), row["error"])
-            rows.append(row)
+            rows[result.index] = row
             context.report_progress(
-                index,
+                completed,
                 len(all_items),
                 f"正在导出 {relative}",
                 success_count=success,
@@ -162,6 +180,10 @@ class WebAutoExportTool(Tool):
             )
 
         if params.output_format == "coco":
+            coco_groups: dict[str, list[tuple[Path, str, list[dict[str, Any]]]]] = {}
+            for index in sorted(coco_by_index):
+                split, item = coco_by_index[index]
+                coco_groups.setdefault(split, []).append(item)
             for split, items in coco_groups.items():
                 document, skipped = build_coco(items, classes)
                 skipped_shapes += skipped
@@ -185,9 +207,14 @@ class WebAutoExportTool(Tool):
             "missing_annotations": missing,
             "skipped_shapes": skipped_shapes,
             "elapsed_seconds": round(time.monotonic() - started, 3),
+            "parallel_workers": context.parallel_workers,
         }
         write_json(output / "summary.json", summary)
-        write_csv(output / "files.csv", rows, ["source", "annotation", "output", "status", "error"])
+        write_csv(
+            output / "files.csv",
+            [row for row in rows if row is not None],
+            ["source", "annotation", "output", "status", "error"],
+        )
         if success == 0:
             raise RuntimeError("没有成功导出任何图像")
         return {

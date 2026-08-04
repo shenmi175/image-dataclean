@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 from unittest.mock import Mock
 
+import backend.scheduler.manager as manager_module
 from backend.infrastructure.database import Database
 from backend.scheduler.events import EventBroker
 from backend.scheduler.manager import RunningTask, TaskManager
@@ -57,3 +58,25 @@ def test_manager_pauses_and_resumes_worker_for_conflict(tmp_path: Path) -> None:
         "action": "rename",
         "scope": "remaining",
     }
+
+
+def test_parallel_worker_budget_uses_auto_global_and_task_override(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(manager_module, "available_cpu_count", lambda: 12)
+    monkeypatch.setattr(
+        manager_module,
+        "recommended_parallel_workers",
+        lambda max_workers: max(1, 12 // max_workers),
+    )
+    manager = TaskManager(
+        Database(tmp_path / "parallel.sqlite3"),
+        EventBroker(),
+        max_workers=4,
+        parallel_workers=0,
+    )
+
+    assert manager.effective_parallel_workers({"parallel_workers": 0}) == 3
+    manager.set_parallel_workers(5)
+    assert manager.effective_parallel_workers({"parallel_workers": 0}) == 5
+    assert manager.effective_parallel_workers({"parallel_workers": 7}) == 7

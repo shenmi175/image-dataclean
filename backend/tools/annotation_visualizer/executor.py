@@ -17,8 +17,8 @@ from backend.tools.annotation_visualizer.parsers import (
     yolo_samples,
 )
 from backend.tools.annotation_visualizer.spec import AnnotationVisualizerParams
-from backend.tools.base import TaskCancelled, TaskContext, Tool
-from backend.tools.common import checkpoint, safe_name, write_csv, write_json
+from backend.tools.base import TaskContext, Tool, ToolCapabilities
+from backend.tools.common import parallel_map, safe_name, write_csv, write_json
 
 
 def color_for(label: str) -> tuple[int, int, int]:
@@ -75,6 +75,7 @@ class AnnotationVisualizerTool(Tool):
     version = "1.0.0"
     description = "可视化 Labelme、YOLO segmentation 或 COCO polygon 标注并生成分页拼图。"
     params_model = AnnotationVisualizerParams
+    capabilities = ToolCapabilities(supports_parallel=True, parallel_strategy="thread")
     ui_schema = {
         "order": [
             "annotation_format",
@@ -130,15 +131,25 @@ class AnnotationVisualizerTool(Tool):
             samples = samples[: params.limit]
         output = Path(context.output_path)
         image_dir = output / "images"
-        rows: list[dict[str, Any]] = []
-        rendered_paths: list[Path] = []
+        rows: list[dict[str, Any] | None] = [None] * len(samples)
+        rendered_by_index: dict[int, Path] = {}
         total_classes: Counter[str] = Counter()
         success = failures = 0
         allowed = set(params.class_filter) if params.class_filter else None
         started = time.monotonic()
-        for index, sample in enumerate(samples, start=1):
-            checkpoint(context)
+        def process(job: tuple[int, VisualSample]) -> tuple[Path, Counter[str]]:
+            index, sample = job
             target = image_dir / f"{index:04d}_{safe_name(Path(sample.key).stem)}.jpg"
+            if not sample.image.is_file():
+                raise FileNotFoundError(f"图像不存在: {sample.image}")
+            visual, counts = render(sample, params.alpha, allowed)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            visual.save(target, quality=94)
+            return target, counts
+
+        jobs = list(enumerate(samples, start=1))
+        for completed, result in enumerate(parallel_map(jobs, process, context), start=1):
+            index, sample = result.item
             row = {
                 "sample": sample.key,
                 "source_image": str(sample.image),
@@ -147,13 +158,9 @@ class AnnotationVisualizerTool(Tool):
                 "classes": "",
                 "error": "",
             }
-            try:
-                if not sample.image.is_file():
-                    raise FileNotFoundError(f"图像不存在: {sample.image}")
-                visual, counts = render(sample, params.alpha, allowed)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                visual.save(target, quality=94)
-                rendered_paths.append(target)
+            if result.error is None and result.value is not None:
+                target, counts = result.value
+                rendered_by_index[index] = target
                 total_classes.update(counts)
                 success += 1
                 row.update(
@@ -161,20 +168,22 @@ class AnnotationVisualizerTool(Tool):
                     status="success",
                     classes=json_counts(counts),
                 )
-            except TaskCancelled:
-                raise
-            except Exception as exc:
+            else:
                 failures += 1
-                row["error"] = str(exc) or exc.__class__.__name__
+                assert result.error is not None
+                row["error"] = str(result.error) or result.error.__class__.__name__
                 context.record_failure(str(sample.image), row["error"])
-            rows.append(row)
+            rows[index - 1] = row
             context.report_progress(
-                index,
+                completed,
                 len(samples),
                 f"正在渲染 {sample.key}",
                 success_count=success,
                 failure_count=failures,
             )
+        rendered_paths = [
+            rendered_by_index[index] for index, _ in jobs if index in rendered_by_index
+        ]
         for start in range(0, len(rendered_paths), params.mosaic_page_size):
             page = rendered_paths[start : start + params.mosaic_page_size]
             save_mosaic(
@@ -190,11 +199,12 @@ class AnnotationVisualizerTool(Tool):
             "failures": failures,
             "class_instances": dict(total_classes),
             "elapsed_seconds": round(time.monotonic() - started, 3),
+            "parallel_workers": context.parallel_workers,
         }
         write_json(output / "summary.json", summary)
         write_csv(
             output / "selected_samples.csv",
-            rows,
+            [row for row in rows if row is not None],
             ["sample", "source_image", "output", "status", "classes", "error"],
         )
         if success == 0:
