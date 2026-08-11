@@ -24,6 +24,7 @@ import webview
 
 from backend.app import create_app
 from backend.core.settings import Settings
+from backend.version import __version__
 
 
 class NativeDialogs:
@@ -121,7 +122,30 @@ def wait_then_close(window: webview.Window, port: int, token: str) -> None:
         time.sleep(0.5)
 
 
+def self_test() -> int:
+    checks: dict[str, str] = {
+        "version": __version__,
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+    }
+    if sys.platform.startswith("linux"):
+        import gi
+
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("WebKit2", "4.1")
+        from gi.repository import Gtk, WebKit2  # noqa: F401
+
+        checks["gtk"] = "3.0"
+        checks["webkit"] = "4.1"
+    print(json.dumps({"status": "ok", "checks": checks}, ensure_ascii=False))
+    return 0
+
+
 def main() -> None:
+    if "--version" in sys.argv[1:]:
+        print(__version__)
+        return
+    if "--self-test" in sys.argv[1:]:
+        raise SystemExit(self_test())
     port = find_available_port()
     token = secrets.token_urlsafe(32)
     # The backend must not be daemonic because it owns isolated task Worker processes.

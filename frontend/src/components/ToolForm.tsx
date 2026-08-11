@@ -3,19 +3,24 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Form,
   Input,
   InputNumber,
+  Modal,
   Radio,
   Space,
   Switch,
   message,
   notification,
+  Typography,
 } from "antd";
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
-import type { JsonSchemaProperty, Task, ToolMetadata } from "../api/types";
+import type { JsonSchemaProperty, ModelComponent, Task, ToolMetadata } from "../api/types";
+
+const { Link, Paragraph, Text } = Typography;
 
 type Props = {
   tool: ToolMetadata;
@@ -331,6 +336,9 @@ function DirectoryListField({ value = [], onChange }: { value?: string[]; onChan
 export function ToolForm({ tool, onCreated, initialOverrides = {} }: Props) {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+  const [licenseComponent, setLicenseComponent] = useState<ModelComponent | null>(null);
+  const [licenseChecked, setLicenseChecked] = useState(false);
+  const [pendingValues, setPendingValues] = useState<Record<string, unknown> | null>(null);
   const properties = tool.params_schema.properties;
   const order = tool.ui_schema.order ?? Object.keys(properties);
   const defaults = useMemo(
@@ -346,8 +354,7 @@ export function ToolForm({ tool, onCreated, initialOverrides = {} }: Props) {
   );
   const values = Form.useWatch([], form) ?? defaults;
 
-  const submit = async (values: Record<string, unknown>) => {
-    setSubmitting(true);
+  const createTask = async (values: Record<string, unknown>) => {
     try {
       const task = await api.createTask(tool.id, values);
       notification.success({
@@ -357,6 +364,45 @@ export function ToolForm({ tool, onCreated, initialOverrides = {} }: Props) {
         description: "可前往活动中心查看进度",
       });
       onCreated(task);
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const submit = async (submittedValues: Record<string, unknown>) => {
+    setSubmitting(true);
+    try {
+      if (tool.id === "dinov3-frame-deduplicator") {
+        const componentId = String(submittedValues.embedding_provider ?? "dinov3-cpu");
+        const component = (await api.components()).find((item) => item.id === componentId);
+        if (!component) throw new Error(`未找到模型组件：${componentId}`);
+        if (!component.license_accepted) {
+          setPendingValues(submittedValues);
+          setLicenseComponent(component);
+          setLicenseChecked(false);
+          return;
+        }
+      }
+      await createTask(submittedValues);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const acceptLicenseAndCreate = async () => {
+    if (!licenseComponent || !pendingValues || !licenseChecked) return;
+    setSubmitting(true);
+    try {
+      await api.acceptComponentLicense(
+        licenseComponent.id,
+        licenseComponent.license.sha256,
+      );
+      const valuesToSubmit = pendingValues;
+      setLicenseComponent(null);
+      setPendingValues(null);
+      await createTask(valuesToSubmit);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -390,9 +436,10 @@ export function ToolForm({ tool, onCreated, initialOverrides = {} }: Props) {
     }
     if (schema.enum) {
       const labels = tool.ui_schema.enum_labels?.[name] ?? {};
+      const options = tool.ui_schema.enum_options?.[name] ?? schema.enum;
       return (
         <Radio.Group>
-          {schema.enum.map((option) => (
+          {options.map((option) => (
             <Radio.Button key={option} value={option}>
               {labels[option] ?? (option === "letterbox" ? "等比填充" : option === "direct" ? "直接缩放" : option)}
             </Radio.Button>
@@ -430,6 +477,7 @@ export function ToolForm({ tool, onCreated, initialOverrides = {} }: Props) {
         {order.map((name) => {
           const schema = properties[name];
           if (!schema) return null;
+          if (tool.ui_schema.widgets?.[name] === "hidden") return null;
           const visibility = tool.ui_schema.visible_if?.[name];
           if (visibility && values[visibility.field] !== visibility.equals) return null;
           const rules = [];
@@ -457,6 +505,40 @@ export function ToolForm({ tool, onCreated, initialOverrides = {} }: Props) {
       <Button type="primary" htmlType="submit" size="large" block loading={submitting}>
         {tool.ui_schema.submit_label ?? `创建${tool.name}任务`}
       </Button>
+      <Modal
+        title={`接受 ${licenseComponent?.license.name ?? "模型许可证"}`}
+        open={Boolean(licenseComponent)}
+        okText="接受并创建任务"
+        cancelText="取消"
+        okButtonProps={{ disabled: !licenseChecked, loading: submitting }}
+        onOk={acceptLicenseAndCreate}
+        onCancel={() => {
+          setLicenseComponent(null);
+          setPendingValues(null);
+          setLicenseChecked(false);
+        }}
+      >
+        {licenseComponent ? (
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Paragraph>
+              {licenseComponent.name} 将在首次运行时匿名下载。模型权重不属于本项目的
+              MIT 授权范围，使用前必须接受独立的 {licenseComponent.license.name}。
+            </Paragraph>
+            <Text>
+              许可证版本：{licenseComponent.license.version} · {" "}
+              <Link href={licenseComponent.license.url} target="_blank" rel="noreferrer">
+                阅读完整许可证
+              </Link>
+            </Text>
+            <Checkbox
+              checked={licenseChecked}
+              onChange={(event) => setLicenseChecked(event.target.checked)}
+            >
+              我已阅读并接受该模型许可证
+            </Checkbox>
+          </Space>
+        ) : null}
+      </Modal>
     </Form>
   );
 }

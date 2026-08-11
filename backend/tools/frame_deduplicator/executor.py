@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
-from PIL import Image
 
+from backend.components import ComponentManager, EmbeddingProviderClient
 from backend.tools.base import TaskContext, Tool
 from backend.tools.common import (
     IMAGE_SUFFIXES,
@@ -19,12 +19,6 @@ from backend.tools.common import (
     discover_files,
     write_csv,
     write_json,
-)
-from backend.tools.frame_deduplicator.model import (
-    MODEL_DIR,
-    MODEL_ID,
-    MODEL_REVISION,
-    ensure_model_files,
 )
 from backend.tools.frame_deduplicator.spec import FrameDeduplicatorParams
 
@@ -53,6 +47,11 @@ class EmbeddingResult:
     errors: dict[Path, str]
     device: str
     batch_size: int
+    provider_id: str = "test-provider"
+    provider_version: str = "0.0.0"
+    model_id: str = "test-model"
+    model_revision: str = "test"
+    model_dir: str = ""
 
 
 def natural_key(path: Path | str) -> tuple[object, ...]:
@@ -138,105 +137,51 @@ def decide_frames(
     return decisions
 
 
-def _resolved_device(requested: str, torch: Any) -> str:
-    if requested == "cpu":
-        return "cpu"
-    if requested == "cuda":
-        if not torch.cuda.is_available():
-            raise RuntimeError("已选择 CUDA，但当前环境没有可用的 CUDA 设备")
-        return "cuda:0"
-    return "cuda:0" if torch.cuda.is_available() else "cpu"
-
-
 def embed_images(
     items: list[ImageItem],
     batch_size: int,
     requested_device: str,
     context: TaskContext,
     *,
+    component_id: str = "dinov3-cpu",
+    license_sha256: str | None = None,
     progress_offset: int = 0,
     progress_total: int | None = None,
 ) -> EmbeddingResult:
-    try:
-        import torch
-        from transformers import AutoImageProcessor, AutoModel
-    except ImportError as exc:
-        raise RuntimeError(
-            "缺少 DINOv3 推理依赖，请重新运行项目初始化以安装 torch 和 transformers"
-        ) from exc
-
-    context.log("info", f"检查本地模型目录: {MODEL_DIR}")
-    model_dir = ensure_model_files(
+    manager = ComponentManager()
+    descriptor = manager.descriptor(component_id)
+    if license_sha256 != descriptor.license.sha256:
+        raise RuntimeError("模型许可证尚未接受或版本已变化，请重新创建任务")
+    context.log("info", f"检查模型组件: {descriptor.name} {descriptor.version}")
+    manager.ensure_installed(
+        component_id,
         checkpoint=lambda: checkpoint(context),
+        progress=lambda current, total: context.report_progress(
+            current,
+            total or None,
+            "正在下载模型组件",
+        ),
     )
-    device = _resolved_device(requested_device, torch)
-    context.log("info", f"从 {model_dir} 加载 {MODEL_ID}，设备 {device}")
-    processor = AutoImageProcessor.from_pretrained(
-        str(model_dir), local_files_only=True
-    )
-    model = AutoModel.from_pretrained(str(model_dir), local_files_only=True).to(device)
-    model.eval()
-
-    embeddings: dict[Path, np.ndarray] = {}
-    errors: dict[Path, str] = {}
-    current_batch = batch_size
-    index = 0
-    while index < len(items):
-        checkpoint(context)
-        selected = items[index : index + current_batch]
-        loaded: list[Image.Image] = []
-        loaded_items: list[ImageItem] = []
-        for item in selected:
-            try:
-                with Image.open(item.path) as image:
-                    loaded.append(image.convert("RGB"))
-                loaded_items.append(item)
-            except Exception as exc:
-                errors[item.path] = str(exc) or exc.__class__.__name__
-        if not loaded_items:
-            index += len(selected)
-            continue
-        try:
-            inputs = processor(images=loaded, return_tensors="pt")
-            inputs = {name: value.to(device) for name, value in inputs.items()}
-            with torch.inference_mode():
-                outputs = model(**inputs)
-                features = outputs.pooler_output
-                if features is None:
-                    features = outputs.last_hidden_state[:, 0]
-                features = torch.nn.functional.normalize(features.float(), dim=1)
-            vectors = features.cpu().numpy()
-        except torch.cuda.OutOfMemoryError:
-            if current_batch == 1:
-                raise RuntimeError("CUDA 显存不足，批大小已降至 1 仍无法推理") from None
-            current_batch = max(1, current_batch // 2)
-            torch.cuda.empty_cache()
-            context.log("warning", f"CUDA 显存不足，推理批大小降为 {current_batch}")
-            for image in loaded:
-                image.close()
-            continue
-        except Exception as exc:
-            message = str(exc) or exc.__class__.__name__
-            for item in loaded_items:
-                errors[item.path] = message
-            vectors = np.empty((0, 0), dtype=np.float32)
-        finally:
-            for image in loaded:
-                image.close()
-        for item, vector in zip(loaded_items, vectors, strict=False):
-            embeddings[item.path] = np.asarray(vector, dtype=np.float32)
-        index += len(selected)
-        context.report_progress(
-            progress_offset + min(index, len(items)),
-            progress_total or len(items),
-            f"正在提取 DINOv3 特征 · 批大小 {current_batch}",
-            success_count=len(embeddings),
-            failure_count=len(errors),
+    with EmbeddingProviderClient(manager, component_id, context) as client:
+        result = client.embed(
+            [item.path for item in items],
+            batch_size=batch_size,
+            device=requested_device,
+            progress_offset=progress_offset,
+            progress_total=progress_total,
         )
-    del model
-    if device.startswith("cuda"):
-        torch.cuda.empty_cache()
-    return EmbeddingResult(embeddings, errors, device, current_batch)
+    metadata = result.metadata
+    return EmbeddingResult(
+        result.embeddings,
+        result.errors,
+        result.device,
+        result.batch_size,
+        metadata.provider_id,
+        metadata.provider_version,
+        metadata.model_id,
+        metadata.model_revision,
+        metadata.model_dir,
+    )
 
 
 def decision_row(decision: Decision) -> dict[str, Any]:
@@ -286,6 +231,8 @@ class FrameDeduplicatorTool(Tool):
             "similarity_threshold",
             "batch_size",
             "device",
+            "embedding_provider",
+            "model_license_sha256",
         ],
         "widgets": {
             "input_dir": "directory",
@@ -293,6 +240,8 @@ class FrameDeduplicatorTool(Tool):
             "comparison_scope": "radio",
             "operation": "radio",
             "device": "radio",
+            "embedding_provider": "hidden",
+            "model_license_sha256": "hidden",
         },
         "visible_if": {
             "confirm_delete": {"field": "operation", "equals": "delete"},
@@ -302,10 +251,11 @@ class FrameDeduplicatorTool(Tool):
             "operation": {"copy": "复制保留帧", "delete": "原地永久删除"},
             "device": {"auto": "自动", "cpu": "CPU", "cuda": "CUDA"},
         },
+        "enum_options": {"device": ["auto", "cpu"]},
         "submit_label": "创建视频帧清理任务",
         "notice": (
             "默认复制代表帧且不修改源目录。原地清理会永久删除冗余图片；"
-            "使用本工具表示接受随模型保存的 DINOv3 License。"
+            "首次提交任务前需要阅读并明确接受独立的 DINOv3 License。"
         ),
     }
 
@@ -341,6 +291,8 @@ class FrameDeduplicatorTool(Tool):
             params.batch_size,
             params.device,
             context,
+            component_id=params.embedding_provider,
+            license_sha256=params.model_license_sha256,
             progress_offset=len(paths),
             progress_total=len(paths) * 3,
         )
@@ -411,9 +363,11 @@ class FrameDeduplicatorTool(Tool):
         )
         summary = {
             "tool": self.id,
-            "model_id": MODEL_ID,
-            "model_revision": MODEL_REVISION,
-            "model_dir": str(MODEL_DIR),
+            "provider_id": embedding_result.provider_id,
+            "provider_version": embedding_result.provider_version,
+            "model_id": embedding_result.model_id,
+            "model_revision": embedding_result.model_revision,
+            "model_dir": embedding_result.model_dir,
             "input_dir": str(root),
             "recursive": params.recursive,
             "comparison_scope": params.comparison_scope,

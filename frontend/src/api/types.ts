@@ -33,6 +33,7 @@ export type ToolMetadata = {
     submit_label?: string;
     notice?: string;
     enum_labels?: Record<string, Record<string, string>>;
+    enum_options?: Record<string, string[]>;
     file_filters?: Record<string, string[]>;
     picker_titles?: Record<string, string>;
     full_width?: string[];
@@ -144,3 +145,22 @@ export type SettingsUpdate = Pick<
   AppSettings,
   "max_workers" | "parallel_workers" | "default_output_dir" | "video_frames"
 >;
+
+export type ModelComponent = {
+  id: string;
+  name: string;
+  version: string;
+  protocol_version: number;
+  devices: string[];
+  installed: boolean;
+  license_accepted: boolean;
+  license: {
+    id: string;
+    name: string;
+    version: string;
+    url: string;
+    sha256: string;
+  };
+  model_id: string;
+  model_revision: string;
+};

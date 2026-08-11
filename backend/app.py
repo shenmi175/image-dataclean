@@ -13,6 +13,7 @@ from backend.core.settings import Settings, get_settings
 from backend.infrastructure.database import Database
 from backend.scheduler.events import EventBroker
 from backend.scheduler.manager import TaskManager
+from backend.version import __version__
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
@@ -46,7 +47,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(
         title="Automation Toolbox API",
-        version="0.3.1",
+        version=__version__,
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
         lifespan=lifespan,

@@ -3,7 +3,6 @@
 from pathlib import Path
 
 ROOT = Path.cwd()
-MODEL_DIR = ROOT / "models" / "dinov3-vits16-pretrain-lvd1689m"
 
 hiddenimports = sorted(
     set(
@@ -23,10 +22,6 @@ hiddenimports = sorted(
             "gi.repository.Gio",
             "gi.repository.GLib",
             "gi.repository.Gtk",
-            "safetensors",
-            "torch",
-            "torchvision",
-            "transformers",
             "uvicorn.logging",
             "uvicorn.loops.auto",
             "uvicorn.protocols.http.auto",
@@ -40,10 +35,9 @@ hiddenimports = sorted(
 datas = [
     (str(ROOT / "frontend" / "dist"), "frontend/dist"),
     (str(ROOT / "README.md"), "."),
+    (str(ROOT / "LICENSE"), "."),
+    (str(ROOT / "THIRD_PARTY_NOTICES.md"), "."),
 ]
-if not MODEL_DIR.is_dir():
-    raise SystemExit("缺少 DINOv3 模型，请先在应用中运行一次视频帧清理任务")
-datas.append((str(MODEL_DIR), f"models/{MODEL_DIR.name}"))
 
 a = Analysis(
     [str(ROOT / "desktop" / "packaged_entry.py")],
@@ -83,6 +77,10 @@ a = Analysis(
         "tensorboard",
         "tensorflow",
         "timm",
+        "safetensors",
+        "torch",
+        "torchvision",
+        "transformers",
         "_tkinter",
         "tkinter",
         "WebKit",

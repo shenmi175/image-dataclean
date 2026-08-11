@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     cancel_timeout: float = Field(default=5.0, ge=1.0, le=60.0)
     data_dir: Path = Field(default_factory=lambda: default_state_dir() / "data")
     log_dir: Path = Field(default_factory=lambda: default_state_dir() / "logs")
+    component_dir: Path = Field(default_factory=lambda: default_state_dir() / "components")
+    model_dir: Path = Field(default_factory=lambda: default_state_dir() / "models")
     database_path: Path | None = None
     auth_disabled: bool = True
     session_token: str | None = None

@@ -20,6 +20,8 @@ from fastapi import (
 from pydantic import BaseModel, Field, ValidationError
 from starlette.responses import StreamingResponse
 
+from backend.components.catalog import BUILTIN_COMPONENTS
+from backend.components.manager import ComponentManager
 from backend.core.compat import UTC
 from backend.core.settings import available_cpu_count, default_workers, recommended_parallel_workers
 from backend.infrastructure.system import open_path, select_directory, select_files
@@ -66,6 +68,11 @@ class AppSettingsUpdate(BaseModel):
     video_frames: VideoFramesDefaults = Field(default_factory=VideoFramesDefaults)
 
 
+class LicenseAcceptanceRequest(BaseModel):
+    accepted: bool
+    license_sha256: str = Field(min_length=64, max_length=64)
+
+
 SETTINGS_KEYS = [
     "max_workers",
     "parallel_workers",
@@ -76,6 +83,16 @@ SETTINGS_KEYS = [
 
 def manager(request: Request):  # type: ignore[no-untyped-def]
     return request.app.state.task_manager
+
+
+def component_manager(request: Request) -> ComponentManager:
+    settings = request.app.state.settings
+    return ComponentManager(settings.component_dir, settings.model_dir)
+
+
+def component_acceptance(request: Request, component_id: str) -> dict[str, Any] | None:
+    value = manager(request).database.get_setting(f"component_license.{component_id}")
+    return value if isinstance(value, dict) else None
 
 
 @api_router.get("/health", tags=["system"])
@@ -168,8 +185,58 @@ async def get_tool(tool_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@api_router.get("/components", tags=["components"])
+async def list_components(request: Request) -> list[dict[str, Any]]:
+    components = component_manager(request)
+    return [
+        components.public_state(descriptor, component_acceptance(request, component_id))
+        for component_id, descriptor in BUILTIN_COMPONENTS.items()
+    ]
+
+
+@api_router.post("/components/{component_id}/accept-license", tags=["components"])
+async def accept_component_license(
+    component_id: str,
+    payload: LicenseAcceptanceRequest,
+    request: Request,
+) -> dict[str, Any]:
+    components = component_manager(request)
+    try:
+        descriptor = components.descriptor(component_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not payload.accepted:
+        raise HTTPException(status_code=422, detail="必须明确接受模型许可证")
+    if payload.license_sha256 != descriptor.license.sha256:
+        raise HTTPException(status_code=409, detail="模型许可证版本已变化，请重新阅读")
+    acceptance = {
+        "accepted": True,
+        "license_id": descriptor.license.id,
+        "license_sha256": descriptor.license.sha256,
+        "accepted_at": datetime.now(UTC).isoformat(),
+    }
+    manager(request).database.set_settings(
+        {f"component_license.{component_id}": acceptance}
+    )
+    return components.public_state(descriptor, acceptance)
+
+
 @api_router.post("/tasks", status_code=201, tags=["tasks"])
 async def create_task(payload: CreateTaskRequest, request: Request) -> dict[str, Any]:
+    if payload.tool_id == "dinov3-frame-deduplicator":
+        component_id = str(payload.params.get("embedding_provider") or "dinov3-cpu")
+        try:
+            descriptor = component_manager(request).descriptor(component_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        acceptance = component_acceptance(request, component_id)
+        if not (
+            acceptance
+            and acceptance.get("accepted") is True
+            and acceptance.get("license_sha256") == descriptor.license.sha256
+        ):
+            raise HTTPException(status_code=409, detail="请先阅读并接受模型许可证")
+        payload.params["model_license_sha256"] = descriptor.license.sha256
     try:
         return await manager(request).create_task(payload.tool_id, payload.params)
     except KeyError as exc:

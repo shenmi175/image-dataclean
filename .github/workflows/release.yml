@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+          lfs: false
+      - name: Verify SSH-signed release tag
+        env:
+          RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+        run: |
+          test -n "$RELEASE_SIGNING_PUBLIC_KEY" || {
+            echo "请在仓库 Actions variable RELEASE_SIGNING_PUBLIC_KEY 中配置 SSH 公钥"
+            exit 1
+          }
+          printf 'release %s\n' "$RELEASE_SIGNING_PUBLIC_KEY" > "$RUNNER_TEMP/allowed_signers"
+          git config gpg.ssh.allowedSignersFile "$RUNNER_TEMP/allowed_signers"
+          git verify-tag "$GITHUB_REF_NAME"
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.11.8"
+          enable-cache: true
+      - uses: actions/setup-node@v6.4.0
+        with:
+          node-version: "22"
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            dpkg-dev gir1.2-webkit2-4.1 libcairo2-dev libgirepository1.0-dev \
+            libgtk-3-0t64 libwebkit2gtk-4.1-0 pkg-config python3-dev python3-gi
+          corepack enable pnpm
+          uv sync --frozen --group dev
+          pnpm --dir frontend install --frozen-lockfile
+      - name: Verify and test
+        run: |
+          .venv/bin/python scripts/check-version.py --tag "$GITHUB_REF_NAME"
+          .venv/bin/ruff check backend desktop tests scripts components/dinov3-provider/src components/dinov3-provider/tests
+          PYTHONPATH=components/dinov3-provider/src .venv/bin/pytest
+          pnpm --dir frontend typecheck
+      - name: Build application and provider
+        run: |
+          ./scripts/build-deb.sh
+          ./scripts/build-provider.sh
+          ./scripts/prepare-release-assets.sh
+          ./dist/AutomationToolbox/automation-toolbox --self-test
+          dpkg-deb --info "dist/automation-toolbox_$(.venv/bin/python -c 'from backend.version import __version__; print(__version__)')_amd64.deb"
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            dist/*.deb
+            dist/*.tar.gz
+            dist/*.json
+            dist/SHA256SUMS
+      - name: Publish GitHub Release Assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" \
+              dist/*.deb dist/*.tar.gz dist/*.json dist/SHA256SUMS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              dist/*.deb dist/*.tar.gz dist/*.json dist/SHA256SUMS \
+              --verify-tag --generate-notes --title "Automation Toolbox $GITHUB_REF_NAME"
+          fi

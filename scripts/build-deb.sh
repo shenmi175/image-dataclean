@@ -24,7 +24,7 @@ if [[ ! -x "$APP_SOURCE/automation-toolbox" ]]; then
   exit 1
 fi
 
-VERSION="$(sed -n 's/^Version: //p' packaging/linux/deb/control)"
+VERSION="$(.venv/bin/python -c 'from backend.version import __version__; print(__version__)')"
 ARCHITECTURE="$(sed -n 's/^Architecture: //p' packaging/linux/deb/control)"
 HOST_ARCHITECTURE="$(dpkg --print-architecture)"
 if [[ "$ARCHITECTURE" != "$HOST_ARCHITECTURE" ]]; then
@@ -48,6 +48,7 @@ cp -a "$APP_SOURCE/." "$STAGE_ROOT/opt/automation-toolbox/"
 chmod -R go-w "$STAGE_ROOT/opt/automation-toolbox"
 find "$STAGE_ROOT/opt/automation-toolbox" -type d -exec chmod 0755 {} +
 install -m 0644 packaging/linux/deb/control "$STAGE_ROOT/DEBIAN/control"
+sed -i "s/@VERSION@/$VERSION/" "$STAGE_ROOT/DEBIAN/control"
 install -m 0755 packaging/linux/deb/automation-toolbox "$STAGE_ROOT/usr/bin/automation-toolbox"
 install -m 0644 \
   packaging/linux/deb/automation-toolbox.desktop \

@@ -227,7 +227,20 @@ class TaskContext:
 
 “暂停”只保证停止继续处理，不保证释放 Worker 和已经打开的资源。若未来需要暂停任务不占用并发槽，应增加可序列化检查点协议，由支持该能力的工具主动保存并退出。
 
-## 7. 工具插件协议
+## 7. 模型组件协议
+
+主应用不得直接依赖 PyTorch、Transformers 或具体模型实现。需要机器学习运行时的
+工具通过 `backend/components` 启动独立 Provider，并使用一行一个 JSON 对象的
+stdin/stdout 协议通信。握手必须声明 Provider ID、Provider 版本、协议版本、模型 ID、
+模型 revision 和支持设备；协议版本不一致时主应用拒绝执行。
+
+组件与主程序使用独立 uv 锁文件和 PyInstaller 构建。主应用从相同版本的 GitHub
+Release Assets 获取组件，验证 GitHub 资产摘要后原子安装；Provider 负责模型下载、
+逐文件摘要校验和本地加载。模型许可证接受记录包含许可证 SHA-256，摘要变化时必须
+重新取得用户明确同意。当前实现只发布 Ubuntu 24.04 amd64 CPU Provider，GPU 或其他
+模型以新的 Provider/组件描述扩展，不修改主应用 Python 环境。
+
+## 8. 工具插件协议
 
 每个工具包含元数据、参数模型和执行器：
 
@@ -264,7 +277,7 @@ Pydantic 模型生成 JSON Schema，React 根据 Schema 渲染基础参数表单
 - 绕过任务上下文更新数据库状态。
 - 向前端暴露任意命令执行接口。
 
-## 8. 前端操作台
+## 9. 前端操作台
 
 ### 8.1 页面结构
 
@@ -289,7 +302,7 @@ Pydantic 模型生成 JSON Schema，React 根据 Schema 渲染基础参数表单
 - 暂停、恢复等按钮需要处理重复点击和接口幂等。
 - 断线时明确显示连接状态，但不假定后台任务已停止。
 
-## 9. 数据持久化
+## 10. 数据持久化
 
 SQLite 至少包含以下表：
 
@@ -319,7 +332,7 @@ output_path, log_path, source_task_id, error_summary
 - 状态发生变化；
 - 出现失败或关键日志。
 
-## 10. 一键启动
+## 11. 一键启动
 
 ### 10.1 开发环境
 
@@ -363,7 +376,7 @@ if __name__ == "__main__":
 - 等待任务完成后退出。
 - 取消所有任务并退出。
 
-## 11. 本地安全边界
+## 12. 本地安全边界
 
 - FastAPI 只绑定 `127.0.0.1`，不监听局域网地址。
 - 每次启动生成随机会话令牌，React 的 REST 和 WebSocket 请求必须携带令牌。
@@ -373,7 +386,7 @@ if __name__ == "__main__":
 - 禁止提供接受任意字符串的 Shell 执行接口。
 - 日志默认隐藏令牌、环境变量和可能的敏感路径。
 
-## 12. 建议目录结构
+## 13. 建议目录结构
 
 ```text
 toolbox/
@@ -423,7 +436,7 @@ toolbox/
 └── package.json
 ```
 
-## 13. 从现有脚本迁移
+## 14. 从现有脚本迁移
 
 当前 `video2image.py` 同时包含 Tkinter UI、参数校验、线程和 OpenCV 逻辑。迁移时按以下顺序进行：
 
@@ -440,7 +453,7 @@ toolbox/
 
 迁移期间可暂时保留旧 Tkinter 入口作为回退，但核心算法只能保留一份，由旧入口和新 Worker 共同调用，避免两套实现产生差异。
 
-## 14. 测试与验收重点
+## 15. 测试与验收重点
 
 - 同时运行多个任务，其中一个失败，其他任务继续执行。
 - 暂停某个任务后，其进度停止，其他任务继续推进。
@@ -453,7 +466,7 @@ toolbox/
 - 多任务运行时并发数不超过配置值。
 - 打包应用能够正确创建 Worker，不发生递归启动。
 
-## 15. 暂不采用的方案
+## 16. 暂不采用的方案
 
 - 继续扩展 Tkinter：难以满足现代响应式布局和长期组件化维护。
 - 直接通过 pywebview JS Bridge 执行任务：任务生命周期会与窗口和桥接线程耦合，不适合多任务调度。
@@ -462,7 +475,7 @@ toolbox/
 - Celery + Redis：当前是单机本地工具箱，运维成本高于收益。
 - 微服务：当前工具共享本地文件系统和运行环境，模块化单体更简单可靠。
 
-## 16. 后续演进
+## 17. 后续演进
 
 当出现以下需求时再升级：
 
@@ -474,7 +487,7 @@ toolbox/
 
 React 与 FastAPI 的通信协议、任务状态机和工具协议应保持与桌面外壳解耦，因此未来替换 pywebview 不需要重写核心系统。
 
-## 17. 参考资料
+## 18. 参考资料
 
 - [pywebview Application architecture](https://pywebview.flowrl.com/guide/architecture)
 - [pywebview Changelog](https://pywebview.flowrl.com/changelog)

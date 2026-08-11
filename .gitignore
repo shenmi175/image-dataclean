@@ -22,9 +22,9 @@ models/*
 .env
 *.log
 dist/*
-!dist/*.deb
 build/
 *.spec
 !packaging/**/*.spec
+!components/**/*.spec
 .DS_Store
 Thumbs.db

@@ -9,26 +9,26 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 2
 fi
 
-if [[ ! -x .venv/bin/python || ! -d frontend/node_modules ]]; then
-  echo "依赖尚未初始化，请先运行 ./scripts/bootstrap.sh"
-  exit 1
+source /etc/os-release
+if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "24.04" || "$(dpkg --print-architecture)" != "amd64" ]]; then
+  echo "仅支持在 Ubuntu 24.04 amd64 上生成官方安装包"
+  exit 2
 fi
 
-for package in python3-gi gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0; do
+command -v uv >/dev/null 2>&1 || { echo "缺少 uv"; exit 1; }
+command -v pnpm >/dev/null 2>&1 || { echo "缺少 pnpm"; exit 1; }
+
+for package in python3-gi gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0 libgtk-3-0t64; do
   if ! dpkg-query -W "$package" >/dev/null 2>&1; then
     echo "缺少 Ubuntu 系统依赖：$package"
-    echo "请运行：sudo apt install python3-gi gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0"
+    echo "请运行：sudo apt install python3-gi gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0 libgtk-3-0t64"
     exit 1
   fi
 done
 
-if [[ ! -x .venv/bin/pyinstaller ]]; then
-  echo "缺少 PyInstaller，请运行：.venv/bin/pip install -e '.[build]'"
-  exit 1
-fi
-
+uv sync --frozen --no-dev --group build
+pnpm --dir frontend install --frozen-lockfile
 pnpm --dir frontend build
-export PYTHONPATH="$ROOT_DIR/packaging/linux${PYTHONPATH:+:$PYTHONPATH}"
 .venv/bin/pyinstaller --noconfirm --clean packaging/linux/toolbox.spec
 cp packaging/linux/start-toolbox.sh dist/AutomationToolbox/start-toolbox.sh
 cp packaging/linux/PACKAGE_README.txt dist/AutomationToolbox/README.txt

@@ -4,13 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-if [[ "$(uname -s)" == "Linux" && -d /usr/lib/python3/dist-packages ]]; then
-  export PYTHONPATH="$ROOT_DIR/packaging/linux${PYTHONPATH:+:$PYTHONPATH}"
-fi
-
 MODE="${1:-desktop}"
 
-if [[ ! -x .venv/bin/python || ! -d frontend/node_modules ]]; then
+if [[ "$MODE" =~ ^(dev|desktop|backend|build|test)$ ]] \
+  && { [[ ! -x .venv/bin/python ]] || [[ ! -d frontend/node_modules ]]; }; then
   echo "依赖尚未初始化，请先运行 ./scripts/bootstrap.sh"
   exit 1
 fi
@@ -39,8 +36,8 @@ case "$MODE" in
     exec ./scripts/build-deb.sh
     ;;
   test)
-    .venv/bin/ruff check backend desktop tests
-    .venv/bin/pytest
+    .venv/bin/ruff check backend desktop tests scripts components/dinov3-provider/src components/dinov3-provider/tests
+    PYTHONPATH=components/dinov3-provider/src .venv/bin/pytest
     pnpm --dir frontend typecheck
     ;;
   *)

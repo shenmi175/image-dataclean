@@ -13,6 +13,12 @@ from backend.tools.registry import registry
 from backend.tools.video_frames import VideoFramesParams
 
 
+def _test_client(app: object) -> TestClient:
+    # The default asyncio selector loop can lose BlockingPortal wakeups under
+    # constrained Linux builders. Production already ships uvloop via uvicorn.
+    return TestClient(app, backend_options={"use_uvloop": True})  # type: ignore[arg-type]
+
+
 def test_required_api_routes_are_registered() -> None:
     paths = set(create_app().openapi()["paths"])
     assert {
@@ -28,9 +34,52 @@ def test_required_api_routes_are_registered() -> None:
         "/api/tasks/history",
         "/api/settings",
         "/api/settings/reset",
+        "/api/components",
+        "/api/components/{component_id}/accept-license",
         "/api/events/stream",
     } <= paths
     assert "/events" in {route.path for route in api_router.routes}
+
+
+def test_component_license_must_be_accepted_before_task_creation(tmp_path: Path) -> None:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        log_dir=tmp_path / "logs",
+        component_dir=tmp_path / "components",
+        model_dir=tmp_path / "models",
+    )
+    source = tmp_path / "images"
+    source.mkdir()
+    params = {"input_dir": str(source), "output_dir": str(tmp_path / "output")}
+    with _test_client(create_app(settings)) as client:
+        components = client.get("/api/components").json()
+        assert components[0]["id"] == "dinov3-cpu"
+        assert components[0]["license_accepted"] is False
+
+        rejected = client.post(
+            "/api/tasks",
+            json={"tool_id": "dinov3-frame-deduplicator", "params": params},
+        )
+        assert rejected.status_code == 409
+
+        stale = client.post(
+            "/api/components/dinov3-cpu/accept-license",
+            json={"accepted": True, "license_sha256": "0" * 64},
+        )
+        assert stale.status_code == 409
+
+        accepted = client.post(
+            "/api/components/dinov3-cpu/accept-license",
+            json={
+                "accepted": True,
+                "license_sha256": components[0]["license"]["sha256"],
+            },
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["license_accepted"] is True
+
+        refreshed = client.get("/api/components").json()
+        assert refreshed[0]["license_accepted"] is True
 
 
 def test_video_tool_is_discoverable() -> None:
@@ -92,7 +141,7 @@ def test_retry_keeps_legacy_video_source_params(tmp_path: Path) -> None:
     video = tmp_path / "legacy.avi"
     video.write_bytes(b"legacy task source")
     output_dir = tmp_path / "outputs"
-    with TestClient(create_app(settings)) as client:
+    with _test_client(create_app(settings)) as client:
         database = client.app.state.database
         database.create_task(
             task_id="legacy-video-task",
@@ -129,7 +178,7 @@ def test_websocket_accepts_query_token(tmp_path: Path) -> None:
         data_dir=tmp_path,
         log_dir=tmp_path / "logs",
     )
-    with TestClient(create_app(settings)) as client:
+    with _test_client(create_app(settings)) as client:
         with client.websocket_connect("/api/events?token=test-session-token"):
             pass
 
@@ -141,7 +190,7 @@ def test_websocket_rejects_invalid_query_token(tmp_path: Path) -> None:
         data_dir=tmp_path,
         log_dir=tmp_path / "logs",
     )
-    with TestClient(create_app(settings)) as client:
+    with _test_client(create_app(settings)) as client:
         with pytest.raises(WebSocketDisconnect) as error:
             with client.websocket_connect("/api/events?token=wrong-token"):
                 pass
@@ -155,14 +204,14 @@ def test_event_stream_rejects_invalid_query_token(tmp_path: Path) -> None:
         data_dir=tmp_path,
         log_dir=tmp_path / "logs",
     )
-    with TestClient(create_app(settings)) as client:
+    with _test_client(create_app(settings)) as client:
         response = client.get("/api/events/stream?token=wrong-token")
     assert response.status_code == 401
 
 
 def test_settings_persist_and_reset(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs", max_workers=2)
-    with TestClient(create_app(settings)) as client:
+    with _test_client(create_app(settings)) as client:
         response = client.put(
             "/api/settings",
             json={
@@ -184,7 +233,7 @@ def test_settings_persist_and_reset(tmp_path: Path) -> None:
         assert response.json()["parallel_workers"] == 2
         assert client.app.state.task_manager.max_workers == 3
 
-    with TestClient(create_app(settings)) as client:
+    with _test_client(create_app(settings)) as client:
         persisted = client.get("/api/settings").json()
         assert persisted["max_workers"] == 3
         assert persisted["parallel_workers"] == 2
@@ -198,7 +247,7 @@ def test_settings_persist_and_reset(tmp_path: Path) -> None:
 
 def test_active_and_history_are_separated(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
-    with TestClient(create_app(settings)) as client:
+    with _test_client(create_app(settings)) as client:
         database = client.app.state.database
         for task_id in ("active-task", "completed-task", "failed-task"):
             database.create_task(
@@ -223,7 +272,7 @@ def test_active_and_history_are_separated(tmp_path: Path) -> None:
 
 def test_delete_history_keeps_or_removes_output_as_requested(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
-    with TestClient(create_app(settings)) as client:
+    with _test_client(create_app(settings)) as client:
         database = client.app.state.database
         keep_id = "abcdefgh-keep"
         keep_output = tmp_path / f"result_{keep_id[:8]}"
@@ -260,7 +309,7 @@ def test_delete_history_keeps_or_removes_output_as_requested(tmp_path: Path) -> 
 
 def test_delete_rejects_active_task_and_unsafe_output(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
-    with TestClient(create_app(settings)) as client:
+    with _test_client(create_app(settings)) as client:
         database = client.app.state.database
         database.create_task(
             task_id="unsafe-task",

@@ -11,9 +11,7 @@ from urllib.request import Request, urlopen
 MODEL_ID = "facebook/dinov3-vits16-pretrain-lvd1689m"
 MODEL_REVISION = "2e601320d0545509ab03374e2f8707f303e1de7a"
 MODEL_NAME = "dinov3-vits16-pretrain-lvd1689m"
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-MODEL_DIR = PROJECT_ROOT / "models" / MODEL_NAME
-MODELSCOPE_BASE = f"https://modelscope.cn/models/{MODEL_ID}/resolve/master"
+MODELSCOPE_BASE = f"https://modelscope.cn/models/{MODEL_ID}/resolve/{MODEL_REVISION}"
 
 
 @dataclass(frozen=True)
@@ -51,6 +49,19 @@ MODEL_FILES = (
 )
 
 
+def model_root() -> Path:
+    configured = os.environ.get("TOOLBOX_MODEL_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg_data_home) if xdg_data_home else Path.home() / ".local" / "share"
+    return base / "automation-toolbox" / "models"
+
+
+def model_dir() -> Path:
+    return model_root() / MODEL_NAME / MODEL_REVISION
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -76,7 +87,7 @@ def download_model_file(
     temporary = target.with_name(f".{target.name}.{os.getpid()}.part")
     digest = hashlib.sha256()
     written = 0
-    request = Request(expected.url, headers={"User-Agent": "automation-toolbox/0.3.1"})
+    request = Request(expected.url, headers={"User-Agent": "automation-toolbox-provider/0.1.0"})
     try:
         with urlopen(request, timeout=60) as response, temporary.open("wb") as handle:
             while True:
@@ -95,23 +106,23 @@ def download_model_file(
         temporary.unlink(missing_ok=True)
 
 
-def _all_files_valid(model_dir: Path, files: Sequence[ModelFile]) -> bool:
-    return all(valid_model_file(model_dir / item.name, item) for item in files)
+def _all_files_valid(model_path: Path, files: Sequence[ModelFile]) -> bool:
+    return all(valid_model_file(model_path / item.name, item) for item in files)
 
 
 def ensure_model_files(
-    model_dir: Path = MODEL_DIR,
+    target_dir: Path | None = None,
     files: Sequence[ModelFile] = MODEL_FILES,
     *,
     checkpoint: Callable[[], None] | None = None,
     downloader: Callable[[ModelFile, Path, Callable[[], None] | None], None]
     | None = None,
 ) -> Path:
-    """Download a verified local snapshot without using third-party caches."""
-    if _all_files_valid(model_dir, files):
-        return model_dir
-    model_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = model_dir / ".download.lock"
+    target_dir = target_dir or model_dir()
+    if _all_files_valid(target_dir, files):
+        return target_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = target_dir / ".download.lock"
     owns_lock = False
     started = time.monotonic()
     while not owns_lock:
@@ -120,8 +131,8 @@ def ensure_model_files(
         try:
             descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
-            if _all_files_valid(model_dir, files):
-                return model_dir
+            if _all_files_valid(target_dir, files):
+                return target_dir
             if time.monotonic() - started > 600:
                 raise TimeoutError("等待其他任务下载 DINOv3 模型超时") from None
             try:
@@ -137,13 +148,13 @@ def ensure_model_files(
     try:
         fetch = downloader or download_model_file
         for expected in files:
-            target = model_dir / expected.name
+            target = target_dir / expected.name
             if not valid_model_file(target, expected):
                 target.unlink(missing_ok=True)
                 fetch(expected, target, checkpoint)
-        if not _all_files_valid(model_dir, files):
+        if not _all_files_valid(target_dir, files):
             raise RuntimeError("DINOv3 模型快照不完整")
-        return model_dir
+        return target_dir
     finally:
         if owns_lock:
             lock_path.unlink(missing_ok=True)

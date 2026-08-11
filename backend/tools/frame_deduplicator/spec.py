@@ -25,6 +25,8 @@ class FrameDeduplicatorParams(OutputDirectoryParams):
     )
     batch_size: int = Field(default=16, ge=1, le=128, title="推理批大小")
     device: Literal["auto", "cpu", "cuda"] = Field(default="auto", title="推理设备")
+    embedding_provider: str = Field(default="dinov3-cpu", title="特征提取组件")
+    model_license_sha256: str | None = Field(default=None, title="模型许可证摘要")
 
     @model_validator(mode="after")
     def validate_paths_and_operation(self) -> FrameDeduplicatorParams:

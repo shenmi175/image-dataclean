@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +18,6 @@ from backend.tools.frame_deduplicator.executor import (
     decide_frames,
     natural_key,
 )
-from backend.tools.frame_deduplicator.model import ModelFile, ensure_model_files
 from tests.tool_test_utils import RecordingContext
 
 executor = frame_deduplicator.executor
@@ -215,24 +213,3 @@ def test_delete_mode_only_deletes_redundant_frames_after_plan(
     assert not similar.exists()
     assert (output / "deletion_plan.csv").is_file()
     assert (output / "decisions.csv").is_file()
-
-
-def test_model_files_are_verified_and_reused(tmp_path: Path) -> None:
-    payload = b"local model bytes"
-    expected = ModelFile("weights.bin", hashlib.sha256(payload).hexdigest(), len(payload))
-    downloads: list[str] = []
-
-    def downloader(model_file: ModelFile, target: Path, checkpoint) -> None:  # type: ignore[no-untyped-def]
-        downloads.append(model_file.name)
-        target.write_bytes(payload)
-
-    model_dir = tmp_path / "models"
-    assert ensure_model_files(model_dir, [expected], downloader=downloader) == model_dir
-    assert downloads == ["weights.bin"]
-
-    ensure_model_files(model_dir, [expected], downloader=downloader)
-    assert downloads == ["weights.bin"]
-
-    (model_dir / "weights.bin").write_bytes(b"corrupt")
-    ensure_model_files(model_dir, [expected], downloader=downloader)
-    assert downloads == ["weights.bin", "weights.bin"]

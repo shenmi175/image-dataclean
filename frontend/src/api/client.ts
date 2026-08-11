@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   HistoryResponse,
+  ModelComponent,
   SettingsUpdate,
   Task,
   TaskDetail,
@@ -64,6 +65,12 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   tools: () => apiFetch<ToolMetadata[]>("/tools"),
+  components: () => apiFetch<ModelComponent[]>("/components"),
+  acceptComponentLicense: (componentId: string, licenseSha256: string) =>
+    apiFetch<ModelComponent>(`/components/${componentId}/accept-license`, {
+      method: "POST",
+      body: JSON.stringify({ accepted: true, license_sha256: licenseSha256 }),
+    }),
   tasks: () => apiFetch<Task[]>("/tasks?limit=200"),
   activeTasks: (limit = 100) => apiFetch<Task[]>(`/tasks/active?limit=${limit}`),
   history: (filters: HistoryQuery) => {
