@@ -63,7 +63,7 @@ PyTorch/Transformers 不会安装进主应用。
 
 ```bash
 ./start.sh deb
-sudo apt install ./dist/automation-toolbox_0.4.0_amd64.deb
+sudo apt install ./dist/automation-toolbox_0.4.1_amd64.deb
 ```
 
 建议使用 `.deb`，APT 会自动安装 GTK/WebKit 运行库。便携 tar 包仍要求 Ubuntu
@@ -156,14 +156,14 @@ PAT 或私钥。发布工作流只接受已经存在且通过 SSH 验证的标�
 git config gpg.format ssh
 git config user.signingkey ~/.ssh/id_ed25519.pub
 ./scripts/create-signed-tag.sh
-git push origin v0.4.0
+git push origin v0.4.1
 ```
 
 验证下载内容：
 
 ```bash
 sha256sum -c SHA256SUMS
-gh attestation verify automation-toolbox_0.4.0_amd64.deb --repo shenmi175/image-dataclean
+gh attestation verify automation-toolbox_0.4.1_amd64.deb --repo shenmi175/image-dataclean
 ```
 
 历史 `.deb` 不应继续提交到 Git/LFS；发布物统一保存在对应 GitHub Release。项目源码
