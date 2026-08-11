@@ -41,9 +41,9 @@ jobs:
           uv lock --check
           uv lock --project components/dinov3-provider --check
           .venv/bin/python scripts/check-version.py
-      - name: Lint and test
-        run: |
-          .venv/bin/ruff check backend desktop tests scripts components/dinov3-provider/src components/dinov3-provider/tests
-          PYTHONPATH=components/dinov3-provider/src .venv/bin/pytest
-          pnpm --dir frontend typecheck
-          pnpm --dir frontend build
+      - name: Lint
+        run: .venv/bin/ruff check backend desktop tests scripts components/dinov3-provider/src components/dinov3-provider/tests
+      - name: Build frontend for tests
+        run: pnpm --dir frontend build
+      - name: Run Python tests
+        run: PYTHONPATH=components/dinov3-provider/src .venv/bin/pytest

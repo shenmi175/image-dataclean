@@ -151,6 +151,7 @@ class Database:
         params: dict[str, Any],
         output_path: str,
         source_task_id: str | None = None,
+        status: TaskStatus = TaskStatus.PENDING,
     ) -> dict[str, Any]:
         now = utc_now()
         with self._lock, self.connect() as connection:
@@ -165,7 +166,7 @@ class Database:
                     task_id,
                     tool_id,
                     tool_version,
-                    TaskStatus.PENDING,
+                    status,
                     json.dumps(params, ensure_ascii=False),
                     now,
                     now,

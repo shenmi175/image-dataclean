@@ -9,6 +9,7 @@ from starlette.websockets import WebSocketDisconnect
 from backend.api.router import api_router, stream_event_messages
 from backend.app import FRONTEND_DIST, create_app
 from backend.core.settings import Settings
+from backend.scheduler.models import TaskStatus
 from backend.tools.registry import registry
 from backend.tools.video_frames import VideoFramesParams
 
@@ -153,8 +154,8 @@ def test_retry_keeps_legacy_video_source_params(tmp_path: Path) -> None:
                 "output_dir": str(output_dir),
             },
             output_path=str(tmp_path / "legacy_result"),
+            status=TaskStatus.FAILED,
         )
-        database.update_task("legacy-video-task", status="failed")
 
         response = client.post("/api/tasks/legacy-video-task/retry")
 
@@ -249,17 +250,21 @@ def test_active_and_history_are_separated(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path, log_dir=tmp_path / "logs")
     with _test_client(create_app(settings)) as client:
         database = client.app.state.database
-        for task_id in ("active-task", "completed-task", "failed-task"):
+        task_statuses = {
+            "active-task": TaskStatus.RUNNING,
+            "completed-task": TaskStatus.COMPLETED,
+            "failed-task": TaskStatus.FAILED,
+        }
+        for task_id, status in task_statuses.items():
             database.create_task(
                 task_id=task_id,
                 tool_id="video-frames",
                 tool_version="1.0.0",
                 params={},
                 output_path=str(tmp_path / f"result_{task_id[:8]}"),
+                status=status,
             )
-        database.update_task("active-task", status="running")
-        database.update_task("completed-task", status="completed")
-        database.update_task("failed-task", status="failed", error_summary="测试失败")
+        database.update_task("failed-task", error_summary="测试失败")
 
         active = client.get("/api/tasks/active").json()
         assert [task["id"] for task in active] == ["active-task"]
@@ -283,8 +288,8 @@ def test_delete_history_keeps_or_removes_output_as_requested(tmp_path: Path) -> 
             tool_version="1.0.0",
             params={},
             output_path=str(keep_output),
+            status=TaskStatus.COMPLETED,
         )
-        database.update_task(keep_id, status="completed")
         assert client.delete(f"/api/tasks/{keep_id}").status_code == 200
         assert keep_output.is_dir()
         assert database.get_task(keep_id) is None
@@ -299,10 +304,10 @@ def test_delete_history_keeps_or_removes_output_as_requested(tmp_path: Path) -> 
             tool_version="1.0.0",
             params={},
             output_path=str(remove_output),
+            status=TaskStatus.COMPLETED,
         )
-        database.update_task(remove_id, status="completed")
         response = client.delete(f"/api/tasks/{remove_id}?delete_output=true")
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         assert response.json()["output_deleted"] is True
         assert not remove_output.exists()
 
@@ -317,6 +322,7 @@ def test_delete_rejects_active_task_and_unsafe_output(tmp_path: Path) -> None:
             tool_version="1.0.0",
             params={},
             output_path=str(tmp_path),
+            status=TaskStatus.RUNNING,
         )
         assert client.delete("/api/tasks/unsafe-task").status_code == 409
         database.update_task("unsafe-task", status="completed")

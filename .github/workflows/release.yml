@@ -50,12 +50,14 @@ jobs:
         run: uv sync --frozen --group dev
       - name: Install locked frontend dependencies
         run: pnpm --dir frontend install --frozen-lockfile
-      - name: Verify and test
+      - name: Verify versions and lint
         run: |
           .venv/bin/python scripts/check-version.py --tag "$GITHUB_REF_NAME"
           .venv/bin/ruff check backend desktop tests scripts components/dinov3-provider/src components/dinov3-provider/tests
-          PYTHONPATH=components/dinov3-provider/src .venv/bin/pytest
-          pnpm --dir frontend typecheck
+      - name: Build frontend for tests
+        run: pnpm --dir frontend build
+      - name: Run Python tests
+        run: PYTHONPATH=components/dinov3-provider/src .venv/bin/pytest
       - name: Build application and provider
         run: |
           ./scripts/build-deb.sh

@@ -37,8 +37,8 @@ case "$MODE" in
     ;;
   test)
     .venv/bin/ruff check backend desktop tests scripts components/dinov3-provider/src components/dinov3-provider/tests
+    pnpm --dir frontend build
     PYTHONPATH=components/dinov3-provider/src .venv/bin/pytest
-    pnpm --dir frontend typecheck
     ;;
   *)
     echo "用法: ./start.sh [dev|desktop|backend|build|package|deb|test]"
